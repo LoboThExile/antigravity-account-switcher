@@ -1,8 +1,8 @@
 {
   "name": "antigravity-account-switcher",
   "displayName": "Antigravity Account Switcher",
-  "description": "Switch between multiple Google accounts in Antigravity to bypass model rate limits",
-  "version": "2.3.0",
+  "description": "Switch Google account profiles across Antigravity Classic, IDE, and CLI",
+  "version": "2.4.5",
   "publisher": "venomchampion",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,14 @@
         "title": "Antigravity: Switch Profile"
       },
       {
+        "command": "antigravity-switcher.selectTarget",
+        "title": "Antigravity: Select Account Target"
+      },
+      {
+        "command": "antigravity-switcher.openMenu",
+        "title": "Antigravity: Open Account Menu"
+      },
+      {
         "command": "antigravity-switcher.deleteProfile",
         "title": "Antigravity: Delete Profile"
       },
@@ -51,9 +59,9 @@
       "properties": {
         "antigravitySwitcher.maxProfiles": {
           "type": "number",
-          "default": 5,
+          "default": 8,
           "minimum": 1,
-          "maximum": 10,
+          "maximum": 8,
           "description": "Maximum number of profiles allowed"
         },
         "antigravitySwitcher.profilesDirectory": {

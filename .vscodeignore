@@ -4,5 +4,7 @@
 .vscode-test/**
 node_modules/**
 test/**
+debug.log
+**/debug.log
 extension.vsixmanifest
 \[Content_Types\].xml

@@ -5,32 +5,46 @@ const fs = require('fs');
 
 /**
  * Antigravity Multi-Account Switcher
- * Final Version 2.0.0
+ * Version 2.4.5
  * 
  * Features:
- * - 5 colorful profile slot buttons for one-click account switching
- * - Save/Delete profile buttons
+ * - Compact status bar menu for profiles, targets, and profile actions
  * - Profile switching with automatic Antigravity restart
  * - Rate limit detection with auto-switch prompt
  * 
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Antigravity Account Switcher v2.3.0 is now active - Full workspace state persistence');
+    console.log('Antigravity Account Switcher v2.4.5 is now active - compact account menu');
 
     const scriptPath = path.join(context.extensionPath, 'scripts', 'profile_manager.ps1');
-    const NUM_SLOTS = 5;
+    const MAX_PROFILES = 8;
+    const TARGETS = [
+        { id: 'classic', label: 'Antigravity Classic' },
+        { id: 'ide', label: 'Antigravity IDE' },
+        { id: 'agy', label: 'Antigravity CLI (agy)' }
+    ];
+    let selectedTarget = context.globalState.get('selectedTarget', 'classic');
+    if (!TARGETS.some(target => target.id === selectedTarget)) selectedTarget = 'classic';
+
+    function getTargetLabel(target = selectedTarget) {
+        return TARGETS.find(item => item.id === target)?.label || TARGETS[0].label;
+    }
 
     // File to store active profile (shared across all profiles)
-    const ACTIVE_PROFILE_FILE = path.join(process.env.APPDATA || '', 'Antigravity', 'active_profile.txt');
+    function activeProfileFile(target = selectedTarget) {
+        const suffix = target === 'classic' ? '' : `_${target}`;
+        return path.join(process.env.APPDATA || '', 'Antigravity', `active_profile${suffix}.txt`);
+    }
 
     /**
      * Get the profile name marked as active by the switcher.
      */
-    function getActiveProfile() {
+    function getActiveProfile(target = selectedTarget) {
         try {
-            if (fs.existsSync(ACTIVE_PROFILE_FILE)) {
-                return fs.readFileSync(ACTIVE_PROFILE_FILE, 'utf8').trim();
+            const file = activeProfileFile(target);
+            if (fs.existsSync(file)) {
+                return fs.readFileSync(file, 'utf8').trim();
             }
         } catch (e) {
             console.error('Error reading active profile:', e);
@@ -41,13 +55,14 @@ function activate(context) {
     /**
      * Mark a profile name in the shared file; this does not verify the account.
      */
-    function setActiveProfile(profileName) {
+    function setActiveProfile(profileName, target = selectedTarget) {
         try {
-            const dir = path.dirname(ACTIVE_PROFILE_FILE);
+            const file = activeProfileFile(target);
+            const dir = path.dirname(file);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            fs.writeFileSync(ACTIVE_PROFILE_FILE, profileName, 'utf8');
+            fs.writeFileSync(file, profileName, 'utf8');
             return true;
         } catch (e) {
             console.error('Error saving active profile:', e);
@@ -235,15 +250,6 @@ function activate(context) {
         }
     }
 
-    // Colorful slot colors
-    const SLOT_COLORS = [
-        '#4FC3F7', // Light Blue
-        '#81C784', // Light Green  
-        '#FFB74D', // Orange
-        '#BA68C8', // Purple
-        '#F06292'  // Pink
-    ];
-
     // Rate limit error patterns to monitor (Gemini + Claude)
     const RATE_LIMIT_PATTERNS = [
         // Google/Gemini patterns
@@ -262,9 +268,9 @@ function activate(context) {
     /**
      * Execute PowerShell script with given arguments
      */
-    function runProfileManager(action, profileName = '') {
+    function runProfileManager(action, profileName = '', target = selectedTarget) {
         return new Promise((resolve) => {
-            const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Action', action];
+            const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Action', action, '-Target', target];
             if (profileName) {
                 args.push('-ProfileName', profileName);
             }
@@ -282,8 +288,8 @@ function activate(context) {
     /**
      * Get list of saved profiles
      */
-    async function getProfiles() {
-        const result = await runProfileManager('List');
+    async function getProfiles(target = selectedTarget) {
+        const result = await runProfileManager('List', '', target);
         if (!result.success) {
             console.error('Could not list profiles:', result.error);
             return [];
@@ -315,47 +321,55 @@ function activate(context) {
         }
         lastRateLimitAlert = now;
 
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
         if (profiles.length === 0) {
             vscode.window.showWarningMessage(
-                '⚠️ Rate limit detected! Save some profiles to quickly switch accounts.'
+                `⚠️ Rate limit detected for ${getTargetLabel(target)}! Save some profiles to switch accounts.`
             );
             return;
         }
 
         const selected = await vscode.window.showWarningMessage(
-            '⚠️ Rate limit detected. Switching accounts will reload the VS Code window. Continue?',
+            `⚠️ Rate limit detected. Switch ${getTargetLabel(target)}? Antigravity will restart.`,
             ...profiles.map(p => p.Name || p.name),
             'Dismiss'
         );
 
         if (selected && selected !== 'Dismiss') {
-            await switchToProfile(selected);
+            await switchToProfile(selected, target);
         }
     }
 
-    /** Ask before replacing profile data, then reload the VS Code window. */
-    async function switchToProfile(profileName) {
+    /** Ask before replacing profile data; app targets restart Antigravity themselves. */
+    async function switchToProfile(profileName, target = selectedTarget) {
+        const confirmationText = target === 'agy'
+            ? `Switch ${getTargetLabel(target)} to "${profileName}" and reload this window? Save any open work first.`
+            : `Switch ${getTargetLabel(target)} to "${profileName}"? Antigravity will close and restart. Save any open work first.`;
+        const confirmationLabel = target === 'agy' ? 'Switch and Reload' : 'Switch and Restart';
         const confirmation = await vscode.window.showWarningMessage(
-            `Switch to "${profileName}" and reload this VS Code window? Save any open work first.`,
+            confirmationText,
             { modal: true },
-            'Switch and Reload'
+            confirmationLabel
         );
-        if (confirmation !== 'Switch and Reload') return;
+        if (confirmation !== confirmationLabel) return;
 
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: `Switching to "${profileName}"...`,
+            title: `Switching ${getTargetLabel(target)} to "${profileName}"...`,
             cancellable: false
         }, async () => {
-            const result = await runProfileManager('Load', profileName);
+            const result = await runProfileManager('Load', profileName, target);
             if (!result.success) {
                 vscode.window.showErrorMessage(`Failed to switch: ${result.error}`);
                 return;
             }
 
-            setActiveProfile(profileName);
-            await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            setActiveProfile(profileName, target);
+            await updateAccountButton();
+            if (target === 'agy') {
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
         });
     }
 
@@ -417,118 +431,91 @@ function activate(context) {
     context.subscriptions.push({ dispose: () => clearInterval(logCheckInterval) });
 
     // ============================================
-    // STATUS BAR BUTTONS
+    // COMPACT STATUS BAR MENU
     // ============================================
 
-    // Create 5 profile slot buttons with different colors
-    const profileButtons = [];
-    for (let i = 0; i < NUM_SLOTS; i++) {
-        const btn = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000 - i);
-        btn.command = `antigravity-switcher.slotAction${i}`;
-        btn.tooltip = `Profile Slot ${i + 1}`;
-        profileButtons.push(btn);
-        context.subscriptions.push(btn);
+    const accountButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
+    accountButton.command = 'antigravity-switcher.openMenu';
+    context.subscriptions.push(accountButton);
+
+    async function updateAccountButton() {
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
+        const targetShort = target === 'agy' ? 'CLI' : target === 'ide' ? 'IDE' : 'Classic';
+        const activeName = getActiveProfile(target);
+        const hasActive = activeName && profiles.some(profile =>
+            (profile.Name || profile.name).toLowerCase() === activeName.toLowerCase()
+        );
+        accountButton.text = `$(account) ${targetShort}`;
+        accountButton.tooltip = `${getTargetLabel(target)}${hasActive ? ` · ${activeName}` : ''} · ${profiles.length}/${MAX_PROFILES} profiles · click for accounts and actions`;
+        accountButton.show();
     }
 
-    // Save button (+ icon)
-    const saveButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000 - NUM_SLOTS);
-    saveButton.text = '$(add)';
-    saveButton.tooltip = 'Save current session as a new profile';
-    saveButton.command = 'antigravity-switcher.saveProfile';
-    saveButton.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-    context.subscriptions.push(saveButton);
-
-    // Delete button (trash icon)
-    const deleteButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000 - NUM_SLOTS - 1);
-    deleteButton.text = '$(trash)';
-    deleteButton.tooltip = 'Delete a profile';
-    deleteButton.command = 'antigravity-switcher.deleteProfile';
-    deleteButton.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-    context.subscriptions.push(deleteButton);
-
-    /**
-     * Update all profile buttons based on current profiles
-     */
-    async function updateProfileButtons() {
-        const profiles = await getProfiles();
-
-        for (let i = 0; i < NUM_SLOTS; i++) {
-            const btn = profileButtons[i];
-            const profile = profiles[i];
-            const slotNum = i + 1;
-            const color = SLOT_COLORS[i];
-
-            if (profile) {
-                const name = profile.Name || profile.name;
-                const activeProfileName = getActiveProfile();
-                const isActive = activeProfileName && activeProfileName.toLowerCase() === name.toLowerCase();
-
-                if (isActive) {
-                    // Marked profile - show with checkmark and highlight
-                    btn.text = `$(check) ${name}`;
-                    btn.tooltip = `"${name}" is marked active; the account itself is not verified`;
-                    btn.color = '#FFFFFF';
-                    btn.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-                } else {
-                    // Inactive profile - show name with color
-                    btn.text = `$(account) ${name}`;
-                    btn.tooltip = `Click to switch to "${name}"`;
-                    btn.color = color;
-                    btn.backgroundColor = undefined;
-                }
-            } else {
-                // Empty slot - grayed out
-                btn.text = `$(circle-slash) ${slotNum}`;
-                btn.tooltip = `Slot ${slotNum} is empty - Click + to save`;
-                btn.color = new vscode.ThemeColor('disabledForeground');
-                btn.backgroundColor = undefined;
-            }
-            btn.show();
-        }
-
-        saveButton.show();
-        deleteButton.show();
-    }
-
-    // Register slot action commands
-    for (let i = 0; i < NUM_SLOTS; i++) {
-        const slotNum = i;
-        const cmd = vscode.commands.registerCommand(`antigravity-switcher.slotAction${i}`, async () => {
-            const profiles = await getProfiles();
-            const profile = profiles[slotNum];
-
-            if (profile) {
-                const profileName = profile.Name || profile.name;
-                const activeProfileName = getActiveProfile();
-
-                // Check if this is already the active profile
-                if (activeProfileName && activeProfileName.toLowerCase() === profileName.toLowerCase()) {
-                    vscode.window.showInformationMessage(`"${profileName}" is already marked active in the switcher.`);
-                    return;
-                }
-
-                await switchToProfile(profileName);
-            } else {
-                // Empty slot - prompt to save
-                vscode.window.showInformationMessage(
-                    `Slot ${slotNum + 1} is empty. Click the + button to save your current session.`
-                );
-            }
+    async function openAccountMenu() {
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
+        const activeName = getActiveProfile(target);
+        const items = profiles.map(profile => {
+            const name = profile.Name || profile.name;
+            const isMarkedActive = activeName && activeName.toLowerCase() === name.toLowerCase();
+            return {
+                label: `${isMarkedActive ? '$(check) ' : '$(account) '}${name}`,
+                description: isMarkedActive ? 'Marked active in the switcher' : `Switch ${getTargetLabel(target)} to this profile`,
+                action: 'switch',
+                profileName: name
+            };
         });
-        context.subscriptions.push(cmd);
+
+        items.push(
+            { label: '$(add) Save current account…', description: `Save a profile for ${getTargetLabel(target)}`, action: 'save' },
+            { label: '$(trash) Delete a profile…', description: `Remove a ${getTargetLabel(target)} profile`, action: 'delete' },
+            { label: `$(server-environment) Change target (${target === 'agy' ? 'CLI' : target === 'ide' ? 'IDE' : 'Classic'})…`, description: 'Choose Classic, IDE, or CLI', action: 'target' }
+        );
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: `Accounts · ${getTargetLabel(target)}`
+        });
+        if (!selected) return;
+
+        if (selected.action === 'switch') await switchToProfile(selected.profileName, target);
+        else if (selected.action === 'save') await vscode.commands.executeCommand('antigravity-switcher.saveProfile');
+        else if (selected.action === 'delete') await vscode.commands.executeCommand('antigravity-switcher.deleteProfile');
+        else if (selected.action === 'target') await vscode.commands.executeCommand('antigravity-switcher.selectTarget');
     }
+
+    const openMenuCmd = vscode.commands.registerCommand('antigravity-switcher.openMenu', openAccountMenu);
+    context.subscriptions.push(openMenuCmd);
 
     // ============================================
     // MAIN COMMANDS
     // ============================================
 
+    const selectTargetCmd = vscode.commands.registerCommand('antigravity-switcher.selectTarget', async () => {
+        const items = TARGETS.map(target => ({
+            label: `${target.id === selectedTarget ? '$(check) ' : ''}${target.label}`,
+            description: target.id === selectedTarget ? 'Currently selected' : '',
+            targetId: target.id
+        }));
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Choose the account target'
+        });
+        if (!selected || selected.targetId === selectedTarget) return;
+
+        selectedTarget = selected.targetId;
+        await context.globalState.update('selectedTarget', selectedTarget);
+        await updateAccountButton();
+        vscode.window.showInformationMessage(`Account menu now targets ${getTargetLabel()}.`);
+    });
+    context.subscriptions.push(selectTargetCmd);
+
     // Command: Save Profile
     const saveCmd = vscode.commands.registerCommand('antigravity-switcher.saveProfile', async () => {
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
 
-        if (profiles.length >= NUM_SLOTS) {
+        if (profiles.length >= MAX_PROFILES) {
             vscode.window.showWarningMessage(
-                `All ${NUM_SLOTS} profile slots are full. Delete a profile first to save a new one.`
+                `All ${MAX_PROFILES} profile slots are full for ${getTargetLabel(target)}. Delete a profile first.`
             );
             return;
         }
@@ -554,12 +541,12 @@ function activate(context) {
             title: `Saving profile "${profileName}"...`,
             cancellable: false
         }, async () => {
-            const result = await runProfileManager('Save', profileName);
+            const result = await runProfileManager('Save', profileName, target);
             if (result.success) {
                 // Mark the saved profile; account identity is not verified here.
-                setActiveProfile(profileName);
-                vscode.window.showInformationMessage(`Profile "${profileName}" saved and marked active in the switcher.`);
-                updateProfileButtons();
+                setActiveProfile(profileName, target);
+                vscode.window.showInformationMessage(`Profile "${profileName}" saved for ${getTargetLabel(target)}.`);
+                updateAccountButton();
             } else {
                 vscode.window.showErrorMessage(`Failed to save profile: ${result.error}`);
             }
@@ -569,7 +556,8 @@ function activate(context) {
 
     // Command: Delete Profile
     const deleteCmd = vscode.commands.registerCommand('antigravity-switcher.deleteProfile', async () => {
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
 
         if (profiles.length === 0) {
             vscode.window.showInformationMessage('No profiles to delete.');
@@ -601,10 +589,10 @@ function activate(context) {
             title: `Deleting profile "${selected.profileName}"...`,
             cancellable: false
         }, async () => {
-            const result = await runProfileManager('Delete', selected.profileName);
+            const result = await runProfileManager('Delete', selected.profileName, target);
             if (result.success) {
                 vscode.window.showInformationMessage(`Profile "${selected.profileName}" deleted.`);
-                updateProfileButtons();
+                updateAccountButton();
             } else {
                 vscode.window.showErrorMessage(`Failed to delete profile: ${result.error}`);
             }
@@ -614,7 +602,8 @@ function activate(context) {
 
     // Command: Switch Profile (via Command Palette)
     const switchCmd = vscode.commands.registerCommand('antigravity-switcher.switchProfile', async () => {
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
 
         if (profiles.length === 0) {
             vscode.window.showInformationMessage('No profiles saved yet. Use the + button to save one.');
@@ -623,23 +612,24 @@ function activate(context) {
 
         const items = profiles.map((p, i) => ({
             label: `$(account) ${p.Name || p.name}`,
-            description: `Slot ${i + 1}`,
+            description: getTargetLabel(target),
             profileName: p.Name || p.name
         }));
 
         const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select a profile to switch to'
+            placeHolder: `Select a ${getTargetLabel(target)} profile to switch to`
         });
 
         if (!selected) return;
 
-        await switchToProfile(selected.profileName);
+        await switchToProfile(selected.profileName, target);
     });
     context.subscriptions.push(switchCmd);
 
     // Command: List Profiles
     const listCmd = vscode.commands.registerCommand('antigravity-switcher.listProfiles', async () => {
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
 
         if (profiles.length === 0) {
             vscode.window.showInformationMessage('No profiles saved yet.');
@@ -647,13 +637,14 @@ function activate(context) {
         }
 
         const profileList = profiles.map((p, i) => `${i + 1}. ${p.Name || p.name}`).join('\n');
-        vscode.window.showInformationMessage(`Saved Profiles:\n${profileList}`);
+        vscode.window.showInformationMessage(`${getTargetLabel(target)} profiles:\n${profileList}`);
     });
     context.subscriptions.push(listCmd);
 
     // Command: Mark a profile in the UI without switching or verifying the account.
     const setActiveCmd = vscode.commands.registerCommand('antigravity-switcher.setActiveProfile', async () => {
-        const profiles = await getProfiles();
+        const target = selectedTarget;
+        const profiles = await getProfiles(target);
 
         if (profiles.length === 0) {
             vscode.window.showInformationMessage('No profiles saved yet.');
@@ -662,7 +653,7 @@ function activate(context) {
 
         const items = profiles.map((p, i) => ({
             label: `$(account) ${p.Name || p.name}`,
-            description: `Slot ${i + 1}`,
+            description: getTargetLabel(target),
             profileName: p.Name || p.name
         }));
 
@@ -672,14 +663,14 @@ function activate(context) {
 
         if (!selected) return;
 
-        setActiveProfile(selected.profileName);
-        vscode.window.showInformationMessage(`"${selected.profileName}" is marked active in the switcher; the account was not switched or verified.`);
-        updateProfileButtons();
+        setActiveProfile(selected.profileName, target);
+        vscode.window.showInformationMessage(`"${selected.profileName}" is marked active for ${getTargetLabel(target)}; the account was not switched or verified.`);
+        updateAccountButton();
     });
     context.subscriptions.push(setActiveCmd);
 
     // Initial update
-    updateProfileButtons();
+    updateAccountButton();
 }
 
 function deactivate() {
