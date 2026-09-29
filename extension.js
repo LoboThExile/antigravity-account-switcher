@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -25,7 +25,7 @@ function activate(context) {
     const ACTIVE_PROFILE_FILE = path.join(process.env.APPDATA || '', 'Antigravity', 'active_profile.txt');
 
     /**
-     * Get the currently active profile name from shared file
+     * Get the profile name marked as active by the switcher.
      */
     function getActiveProfile() {
         try {
@@ -39,7 +39,7 @@ function activate(context) {
     }
 
     /**
-     * Set the active profile name in shared file
+     * Mark a profile name in the shared file; this does not verify the account.
      */
     function setActiveProfile(profileName) {
         try {
@@ -264,10 +264,12 @@ function activate(context) {
      */
     function runProfileManager(action, profileName = '') {
         return new Promise((resolve) => {
-            const args = profileName ? `-Action ${action} -ProfileName "${profileName}"` : `-Action ${action}`;
-            const command = `powershell -ExecutionPolicy Bypass -File "${scriptPath}" ${args}`;
+            const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Action', action];
+            if (profileName) {
+                args.push('-ProfileName', profileName);
+            }
 
-            exec(command, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+            execFile('powershell', args, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
                 if (error) {
                     resolve({ success: false, output: stdout, error: stderr || error.message });
                 } else {
@@ -282,12 +284,13 @@ function activate(context) {
      */
     async function getProfiles() {
         const result = await runProfileManager('List');
+        if (!result.success) {
+            console.error('Could not list profiles:', result.error);
+            return [];
+        }
         try {
-            const match = result.output.match(/\[[\s\S]*?\]/);
-            if (match) {
-                const profiles = JSON.parse(match[0]);
-                return Array.isArray(profiles) ? profiles : [];
-            }
+            const data = JSON.parse(result.output.trim());
+            return Array.isArray(data.Profiles) ? data.Profiles : [];
         } catch (e) {
             console.error('Error parsing profiles:', e);
         }
@@ -320,28 +323,40 @@ function activate(context) {
             return;
         }
 
-        // Build quick switch options
-        const items = profiles.map(p => ({
-            label: `$(account) Switch to ${p.Name || p.name}`,
-            profileName: p.Name || p.name
-        }));
-        items.push({ label: '$(x) Dismiss', profileName: null });
-
         const selected = await vscode.window.showWarningMessage(
-            '⚠️ Rate limit detected! Switch to another account?',
+            '⚠️ Rate limit detected. Switching accounts will reload the VS Code window. Continue?',
             ...profiles.map(p => p.Name || p.name),
             'Dismiss'
         );
 
         if (selected && selected !== 'Dismiss') {
-            vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: `Switching to "${selected}"...`,
-                cancellable: false
-            }, async () => {
-                await runProfileManager('Load', selected);
-            });
+            await switchToProfile(selected);
         }
+    }
+
+    /** Ask before replacing profile data, then reload the VS Code window. */
+    async function switchToProfile(profileName) {
+        const confirmation = await vscode.window.showWarningMessage(
+            `Switch to "${profileName}" and reload this VS Code window? Save any open work first.`,
+            { modal: true },
+            'Switch and Reload'
+        );
+        if (confirmation !== 'Switch and Reload') return;
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Switching to "${profileName}"...`,
+            cancellable: false
+        }, async () => {
+            const result = await runProfileManager('Load', profileName);
+            if (!result.success) {
+                vscode.window.showErrorMessage(`Failed to switch: ${result.error}`);
+                return;
+            }
+
+            setActiveProfile(profileName);
+            await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        });
     }
 
     // ============================================
@@ -449,9 +464,9 @@ function activate(context) {
                 const isActive = activeProfileName && activeProfileName.toLowerCase() === name.toLowerCase();
 
                 if (isActive) {
-                    // Active profile - show with checkmark and highlight
+                    // Marked profile - show with checkmark and highlight
                     btn.text = `$(check) ${name}`;
-                    btn.tooltip = `"${name}" is currently active`;
+                    btn.tooltip = `"${name}" is marked active; the account itself is not verified`;
                     btn.color = '#FFFFFF';
                     btn.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
                 } else {
@@ -488,26 +503,11 @@ function activate(context) {
 
                 // Check if this is already the active profile
                 if (activeProfileName && activeProfileName.toLowerCase() === profileName.toLowerCase()) {
-                    vscode.window.showInformationMessage(`"${profileName}" is already the active profile.`);
+                    vscode.window.showInformationMessage(`"${profileName}" is already marked active in the switcher.`);
                     return;
                 }
 
-                // Switch to this profile (one-click, no confirmation)
-                vscode.window.withProgress({
-                    location: vscode.ProgressLocation.Notification,
-                    title: `Switching to "${profileName}"...`,
-                    cancellable: false
-                }, async () => {
-                    // Save the full workspace state (all folders, editors) before switching
-                    saveFullWorkspaceState();
-                    setActiveProfile(profileName);
-
-                    const result = await runProfileManager('Load', profileName);
-                    if (!result.success) {
-                        vscode.window.showErrorMessage(`Failed to switch: ${result.error}`);
-                    }
-                    // Antigravity will restart automatically
-                });
+                await switchToProfile(profileName);
             } else {
                 // Empty slot - prompt to save
                 vscode.window.showInformationMessage(
@@ -556,9 +556,9 @@ function activate(context) {
         }, async () => {
             const result = await runProfileManager('Save', profileName);
             if (result.success) {
-                // Mark this profile as active (user is currently logged into this account)
+                // Mark the saved profile; account identity is not verified here.
                 setActiveProfile(profileName);
-                vscode.window.showInformationMessage(`Profile "${profileName}" saved and set as active!`);
+                vscode.window.showInformationMessage(`Profile "${profileName}" saved and marked active in the switcher.`);
                 updateProfileButtons();
             } else {
                 vscode.window.showErrorMessage(`Failed to save profile: ${result.error}`);
@@ -633,19 +633,7 @@ function activate(context) {
 
         if (!selected) return;
 
-        vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `Switching to "${selected.profileName}"...`,
-            cancellable: false
-        }, async () => {
-            // Save full workspace state (all folders, editors) before switching
-            saveFullWorkspaceState();
-            setActiveProfile(selected.profileName);
-            const result = await runProfileManager('Load', selected.profileName);
-            if (!result.success) {
-                vscode.window.showErrorMessage(`Failed to switch: ${result.error}`);
-            }
-        });
+        await switchToProfile(selected.profileName);
     });
     context.subscriptions.push(switchCmd);
 
@@ -663,7 +651,7 @@ function activate(context) {
     });
     context.subscriptions.push(listCmd);
 
-    // Command: Set Active Profile (without switching)
+    // Command: Mark a profile in the UI without switching or verifying the account.
     const setActiveCmd = vscode.commands.registerCommand('antigravity-switcher.setActiveProfile', async () => {
         const profiles = await getProfiles();
 
@@ -679,13 +667,13 @@ function activate(context) {
         }));
 
         const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select which profile is currently active (no restart)'
+            placeHolder: 'Mark the profile shown as active (does not switch or verify the account)'
         });
 
         if (!selected) return;
 
         setActiveProfile(selected.profileName);
-        vscode.window.showInformationMessage(`"${selected.profileName}" is now marked as the active profile.`);
+        vscode.window.showInformationMessage(`"${selected.profileName}" is marked active in the switcher; the account was not switched or verified.`);
         updateProfileButtons();
     });
     context.subscriptions.push(setActiveCmd);

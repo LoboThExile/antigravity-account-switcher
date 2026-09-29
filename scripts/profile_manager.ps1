@@ -98,53 +98,36 @@ function Switch-Profile {
         exit 1
     }
     
-    # Find Antigravity executable
-    $exePath = "$env:LOCALAPPDATA\Programs\Antigravity\Antigravity.exe"
-    if (-not (Test-Path $exePath)) {
-        $exePath = "$env:PROGRAMFILES\Antigravity\Antigravity.exe"
-    }
-    if (-not (Test-Path $exePath)) {
-        Write-Error "Could not find Antigravity executable"
-        exit 1
-    }
-    
-    # Stop Antigravity processes
-    Write-Host "Stopping Antigravity..."
-    $processes = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-    if ($processes) {
-        $processes | Stop-Process -Force
-        Start-Sleep -Seconds 3
-    }
-    
-    # Backup current User Data
+    # Keep a rollback copy until the replacement succeeds.
     $backupPath = "${UserDataPath}_switching_backup"
+    if (Test-Path $backupPath) {
+        Remove-Item -Path $backupPath -Recurse -Force
+    }
+    
+    if (Test-Path $UserDataPath) {
+        Rename-Item -Path $UserDataPath -NewName "${UserDataPath}_switching_backup" -Force
+    }
+    
+    try {
+        Write-Host "Loading profile '$Name'..."
+        Copy-Item -Path $profilePath -Destination $UserDataPath -Recurse -Force -ErrorAction Stop
+    } catch {
+        # Restore the previous data if copying the selected profile fails.
+        if (Test-Path $UserDataPath) {
+            Remove-Item -Path $UserDataPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $backupPath) {
+            Rename-Item -Path $backupPath -NewName 'User' -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    
     if (Test-Path $backupPath) {
         Remove-Item -Path $backupPath -Recurse -Force -ErrorAction SilentlyContinue
     }
     
-    if (Test-Path $UserDataPath) {
-        Write-Host "Backing up current session..."
-        Rename-Item -Path $UserDataPath -NewName "${UserDataPath}_switching_backup" -Force -ErrorAction SilentlyContinue
-    }
-    
-    # Copy profile to User Data
-    Write-Host "Loading profile '$Name'..."
-    Copy-Item -Path $profilePath -Destination $UserDataPath -Recurse -Force
-    
-    # Clean up backup in background
-    if (Test-Path $backupPath) {
-        Start-Job -ScriptBlock { param($p) Start-Sleep -Seconds 5; Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue } -ArgumentList $backupPath | Out-Null
-    }
-    
-    # Restart Antigravity using explorer.exe for truly detached process
-    Write-Host "Starting Antigravity..."
-    Start-Sleep -Seconds 2
-    
-    # Method 1: Use explorer.exe to launch (most reliable for detached processes)
-    Start-Process "explorer.exe" -ArgumentList "`"$exePath`""
-    
-    Write-Host "Profile '$Name' loaded successfully."
-    @{ Success = $true; Message = "Profile loaded"; Restarted = $true } | ConvertTo-Json -Compress
+    Write-Host "Profile '$Name' loaded. Reload the VS Code window to apply it."
+    @{ Success = $true; Message = "Profile loaded"; ReloadRequired = $true } | ConvertTo-Json -Compress
 }
 
 function Remove-Profile {
@@ -167,14 +150,8 @@ function List-Profiles {
     $count = $profiles.Length
     
     if ($count -eq 0) {
-        Write-Host "No profiles saved yet."
         $result = @{ Profiles = @(); Count = 0; MaxProfiles = $MaxProfiles }
     } else {
-        Write-Host "Saved Profiles ($count/$MaxProfiles):"
-        Write-Host "-----------------------------------"
-        foreach ($profile in $profiles) {
-            Write-Host "  - $($profile.Name) (Created: $($profile.Created), Size: $($profile.Size) MB)"
-        }
         $result = @{ Profiles = $profiles; Count = $count; MaxProfiles = $MaxProfiles }
     }
     $result | ConvertTo-Json -Depth 3 -Compress

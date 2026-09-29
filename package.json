@@ -43,7 +43,7 @@
       },
       {
         "command": "antigravity-switcher.setActiveProfile",
-        "title": "Antigravity: Set Active Profile (No Restart)"
+        "title": "Antigravity: Mark Active Profile (No Switch or Verification)"
       }
     ],
     "configuration": {

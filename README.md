@@ -27,8 +27,8 @@ Seamlessly switch between multiple Google accounts in Antigravity to bypass mode
 
 ### Method 1: Install from VSIX (Recommended)
 
-1. **Download** the `antigravity-account-switcher-2.0.0.vsix` file
-2. **Open Antigravity**
+1. Build `antigravity-account-switcher-2.3.0.vsix` with the command below, or use the VSIX you were given
+2. **Open VS Code**
 3. Press `Ctrl+Shift+P` to open Command Palette
 4. Type: `Extensions: Install from VSIX...`
 5. Select the downloaded `.vsix` file
@@ -37,8 +37,7 @@ Seamlessly switch between multiple Google accounts in Antigravity to bypass mode
 ### Method 2: Command Line Install
 
 ```powershell
-# Run this in PowerShell or Command Prompt
-& "$env:LOCALAPPDATA\Programs\Antigravity\bin\antigravity.cmd" --install-extension "path\to\antigravity-account-switcher-2.0.0.vsix"
+code --install-extension .\antigravity-account-switcher-2.3.0.vsix
 ```
 
 ### Method 3: Manual Install (Copy Files)
@@ -53,10 +52,20 @@ Seamlessly switch between multiple Google accounts in Antigravity to bypass mode
 
 ---
 
+## Build from source
+
+From the repository directory, run:
+
+```powershell
+npx --yes @vscode/vsce package --no-dependencies
+```
+
+This creates `antigravity-account-switcher-2.3.0.vsix`. Install it in VS Code with the Command Palette (`Extensions: Install from VSIX...`) or the command above, then reload the window.
+
 ## How It Works
 
 1. **Save a Profile**: Log into a Google account in Antigravity, then click the **+** button and enter a name
-2. **Switch Profiles**: Click any colored profile button to instantly switch (Antigravity will restart)
+2. **Switch Profiles**: Click a profile button or use the command palette. The extension asks for confirmation, replaces the saved user data, then reloads the VS Code window. It does not launch the standalone Antigravity client.
 3. **Rate Limit Auto-Switch**: When you hit a rate limit, a prompt appears offering to switch accounts
 
 ## Commands
@@ -67,6 +76,7 @@ Seamlessly switch between multiple Google accounts in Antigravity to bypass mode
 | `Antigravity: Switch Profile` | Switch via picker |
 | `Antigravity: Delete Profile` | Delete a profile |
 | `Antigravity: List Profiles` | Show saved profiles |
+| `Antigravity: Mark Active Profile (No Switch or Verification)` | Change the switcher's marker only |
 
 ## Requirements
 
@@ -76,8 +86,9 @@ Seamlessly switch between multiple Google accounts in Antigravity to bypass mode
 
 ## Notes
 
-- Profile switching **restarts Antigravity** to apply changes
-- Each profile stores the complete authentication state
+- Profile switching requires confirmation and reloads the VS Code window to apply changes
+- Profiles are copies of the configured Antigravity user-data folder; they may contain sensitive session data
+- The highlighted profile is only the switcher's marker. The extension does not verify which Google account is authenticated
 - Maximum 5 profiles supported
 
 ---
