@@ -1,56 +1,55 @@
-# Antigravity Multi-Account Switcher
+# Antigravity Account Switcher
 
 **Version 2.4.5**
 
-Seamlessly switch between multiple Google accounts in Antigravity to bypass model rate limits without manual re-login.
+Antigravity Account Switcher saves and restores local account profiles for Antigravity Classic, Antigravity IDE, and the Antigravity CLI (`agy`). Each target has its own profile list, with up to **8 profiles per target**.
 
-## Features
+## What it does
 
-### Compact Account Menu
-- A single **Account** status bar button opens profiles, target selection, save, and delete actions
-- **3 account targets**: Antigravity Classic, Antigravity IDE, and Antigravity CLI (`agy`)
-- Each target supports up to 8 profiles
-- Profile switching asks for confirmation before replacing credentials
+- Keeps account profiles separate for Classic, IDE, and CLI.
+- Saves and restores the relevant Antigravity user data or CLI credentials for the selected target.
+- Asks before switching profiles because app targets close and restart Antigravity, while CLI switches reload the current window.
+- Offers a status bar menu for switching, saving, deleting, and selecting a target.
+- Watches Antigravity diagnostics and logs for rate limit messages and offers a profile switch. Alerts have a one-minute cooldown.
 
-### ➕ Easy Profile Management
-- Save and delete actions live inside the compact Account menu
-- Classic credentials are copied from `%APPDATA%\Antigravity\User`; IDE credentials are copied from `%APPDATA%\Antigravity IDE\User`. Their snapshots live in `%APPDATA%\Antigravity\Profiles` and `%APPDATA%\Antigravity\Profiles-ide`; CLI snapshots live in `%APPDATA%\Antigravity\Profiles-agy`.
+The extension does not identify or verify the Google account contained in a profile. The check mark in the menu only means that the profile is marked active by the switcher.
 
-### ⚠️ Rate Limit Detection
-- Automatically monitors for rate limit errors (supports Gemini and Claude)
-- When detected, prompts you to switch to another account
-- 1-minute cooldown between alerts to avoid spam
+## Targets and local data
 
----
+| Target | Source data | Saved profiles | Switch behavior |
+| --- | --- | --- | --- |
+| Classic | `%APPDATA%\Antigravity\User` | `%APPDATA%\Antigravity\Profiles\<name>` | Stops Antigravity, replaces `User`, then launches Antigravity. |
+| IDE | `%APPDATA%\Antigravity IDE\User` | `%APPDATA%\Antigravity\Profiles-ide\<name>` | Stops Antigravity, replaces `User`, then launches it with the IDE data root. |
+| CLI (`agy`) | Windows Credential Manager entry `gemini:antigravity` and the listed files under `%USERPROFILE%\.gemini` | `%APPDATA%\Antigravity\Profiles-agy\<name>` | Restores the saved credential state and reloads the current window. |
 
-## Installation Instructions
+CLI snapshots include the `antigravity-oauth-token`, `oauth_creds.json`, and `google_accounts.json` files when present. They also include the Windows Credential Manager secret used by Antigravity CLI. The snapshot is stored as `cli-state.json` in the profile directory; treat it as sensitive credential data and do not share it.
 
-### Method 1: Install from VSIX (Recommended)
+Classic and IDE snapshots copy the full `User` directory, which can contain session data and other local settings. Keep profile directories private and delete profiles you no longer need.
 
-1. Build `antigravity-account-switcher-2.4.5.vsix` with the command below
-2. **Open VS Code**
-3. Press `Ctrl+Shift+P` to open Command Palette
-4. Type: `Extensions: Install from VSIX...`
-5. Select the downloaded `.vsix` file
-6. Click **Reload** when prompted (or press `Ctrl+Shift+P` → `Developer: Reload Window`)
+## Requirements
 
-### Method 2: Command Line Install
+- Windows 10 or 11
+- Antigravity installed
+- Windows PowerShell
+- An Antigravity CLI account already authenticated in Windows Credential Manager before saving a CLI profile
+
+Classic and IDE switches look for `Antigravity.exe` in `%LOCALAPPDATA%\Programs\antigravity\` and `%PROGRAMFILES%\Antigravity\`. If it cannot be found, the switch is not applied.
+
+## Install from VSIX
+
+Build the package from this repository using the instructions below, or use the provided `antigravity-account-switcher-2.4.5.vsix` file:
+
+1. Open Antigravity.
+2. Open the Command Palette with `Ctrl+Shift+P`.
+3. Select **Extensions: Install from VSIX...**.
+4. Choose `antigravity-account-switcher-2.4.5.vsix`.
+5. Reload the window when prompted.
+
+You can also install it from PowerShell:
 
 ```powershell
 code --install-extension .\antigravity-account-switcher-2.4.5.vsix
 ```
-
-### Method 3: Manual Install (Copy Files)
-
-1. Navigate to: `%USERPROFILE%\.vscode\extensions\` (or `%USERPROFILE%\.antigravity\extensions\`)
-2. Create folder: `antigravity-account-switcher-2.4.5`
-3. Copy these files into it:
-   - `extension.js`
-   - `package.json`
-   - `scripts\profile_manager.ps1`
-4. Restart Antigravity
-
----
 
 ## Build from source
 
@@ -60,40 +59,44 @@ From the repository directory, run:
 npx --yes @vscode/vsce package --no-dependencies
 ```
 
-This creates `antigravity-account-switcher-2.4.5.vsix`. Install it in VS Code with the Command Palette (`Extensions: Install from VSIX...`) or the command above, then reload the window.
+This creates `antigravity-account-switcher-2.4.5.vsix`. Install it through the Command Palette or with the `code --install-extension` command above.
 
-## How It Works
+## Use the switcher
 
-1. **Open the menu**: Click the compact Account item in the status bar. Each target has a separate set of profiles.
-2. **Save a Profile**: Log into the selected target, open the Account menu, choose **Save current account**, and enter a name. CLI profiles require the matching Windows Credential Manager entry and also snapshot any Antigravity CLI token and Gemini OAuth files that are present.
-3. **Switch Profiles**: Select a profile in the Account menu or use the command palette. For Classic and IDE, the extension closes Antigravity, replaces the target's `User` data, and relaunches the app. CLI restores its saved credentials and reloads the current window.
-4. **Rate Limit Auto-Switch**: When you hit a rate limit, a prompt appears offering to switch profiles for the currently selected target.
+1. Click the **Account** item in the status bar.
+2. Choose **Change target** and select Classic, IDE, or CLI.
+3. Sign into the account you want to save in that target.
+4. Open the Account menu and choose **Save current account**. Enter a profile name.
+5. To change accounts, choose a saved profile and confirm the switch.
+
+Profile names must be unique within their target and cannot contain `\ / : * ? " < > |`. The same name can be used in different targets. Delete a profile before reusing its name in that target.
+
+### What happens when switching
+
+- **Classic and IDE:** The extension warns that Antigravity will close. The profile manager stops Antigravity processes, replaces the selected target's `User` directory, and launches the app again. Save open work first.
+- **CLI (`agy`):** The profile manager restores the Windows credential and Gemini CLI files, then the extension reloads the current window. It does not close and relaunch Antigravity.
+
+Rate limit prompts use the currently selected target. Selecting a profile from the prompt follows the same switch behavior described above.
 
 ## Commands
 
 | Command | Description |
-|---------|-------------|
-| `Antigravity: Save Current Profile` | Save current session |
-| `Antigravity: Switch Profile` | Switch via picker |
-| `Antigravity: Select Account Target` | Choose Classic, IDE, or CLI (`agy`) |
-| `Antigravity: Open Account Menu` | Open the compact status bar menu |
-| `Antigravity: Delete Profile` | Delete a profile |
-| `Antigravity: List Profiles` | Show saved profiles |
-| `Antigravity: Mark Active Profile (No Switch or Verification)` | Change the switcher's marker only |
+| --- | --- |
+| `Antigravity: Open Account Menu` | Open the status bar menu. |
+| `Antigravity: Select Account Target` | Select Classic, IDE, or CLI. |
+| `Antigravity: Save Current Profile` | Save the current target's account state. |
+| `Antigravity: Switch Profile` | Choose a profile for the current target. |
+| `Antigravity: Delete Profile` | Delete a profile from the current target. |
+| `Antigravity: List Profiles` | List profiles for the current target. |
+| `Antigravity: Mark Active Profile (No Switch or Verification)` | Change the menu marker without switching or verifying an account. |
 
-## Requirements
+## Limits and notes
 
-- Windows 10/11
-- Antigravity IDE
-- PowerShell (included with Windows)
+- Up to 8 profiles are allowed for each target (up to 24 total).
+- Switching requires confirmation. Classic and IDE switches close Antigravity and can discard unsaved work.
+- The active-profile marker is informational only; it does not confirm that the corresponding account is currently signed in.
+- Classic and IDE profiles copy user data that may contain sensitive session information. CLI snapshots contain credential material. Keep the profile directories private.
 
-## Notes
+## License
 
-- Profile switching requires confirmation. Classic and IDE switches close and relaunch Antigravity; CLI switches reload the current window.
-- Classic and IDE profiles copy their respective Antigravity user-data folders and may contain sensitive session data. CLI profiles also store OAuth credential material in the local profile directory so the extension can restore the same Windows credential and Gemini CLI files used by Antigravity Manager.
-- The highlighted profile is only the switcher's marker. The extension does not verify which Google account is authenticated
-- Maximum 8 profiles per target
-
----
-
-Made for bypassing rate limits without the hassle of manual re-login! 🚀
+MIT. See [LICENSE](LICENSE).
