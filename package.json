@@ -3,11 +3,11 @@
   "displayName": "Antigravity Account Switcher",
   "description": "Switch Google account profiles across Antigravity Classic, IDE, and CLI",
   "version": "2.4.5",
-  "publisher": "venomchampion",
+  "publisher": "albid0minator",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/venomunicorn/antigravity-account-switcher"
+    "url": "https://github.com/albid0minator/antigravity-account-switcher"
   },
   "engines": {
     "vscode": "^1.85.0"
