@@ -43,7 +43,12 @@ $AntigravityExeCandidates = @(
 ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 $CredentialTarget = "gemini:antigravity"
 $CredentialUser = "antigravity"
-$GeminiOAuthFiles = @("oauth_creds.json", "google_accounts.json")
+$CliStateRelativePaths = @(
+    "antigravity-oauth-token",
+    "oauth_creds.json",
+    "google_accounts.json",
+    "antigravity-cli/token.json"
+)
 
 if (-not (Test-Path -LiteralPath $ProfilesStorePath)) {
     New-Item -ItemType Directory -Path $ProfilesStorePath -Force | Out-Null
@@ -148,10 +153,15 @@ function Get-Profiles {
         $bytes = (Get-ChildItem -LiteralPath $_.FullName -File -Recurse -ErrorAction SilentlyContinue |
             Measure-Object -Property Length -Sum).Sum
         if ($null -eq $bytes) { $bytes = 0 }
+        $accountEmail = $null
+        if ($Target -eq "agy") {
+            try { $accountEmail = Get-CliProfileEmail -ProfilePath $_.FullName } catch { }
+        }
         $profiles += @{
             Name = $_.Name
             Created = $_.CreationTime.ToString("yyyy-MM-dd HH:mm")
             Size = [math]::Round($bytes / 1MB, 2)
+            AccountEmail = $accountEmail
         }
     }
     return $profiles
@@ -164,6 +174,134 @@ function Assert-ProfileName {
     }
 }
 
+function Add-AccountEmails {
+    param(
+        $Value,
+        [System.Collections.Generic.List[string]]$Emails,
+        [int]$Depth = 0
+    )
+
+    if ($null -eq $Value -or $Depth -gt 10) { return }
+    if ($Value -is [string]) {
+        $text = $Value.Trim()
+        if ($text -match '^[^\s@]+@[^\s@]+$') {
+            [void]$Emails.Add($text.ToLowerInvariant())
+            return
+        }
+
+        $parts = $text.Split('.')
+        if ($parts.Count -ge 3) {
+            try {
+                $payload = $parts[1].Replace('-', '+').Replace('_', '/')
+                switch ($payload.Length % 4) {
+                    2 { $payload += '==' }
+                    3 { $payload += '=' }
+                }
+                $jwtPayload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json -ErrorAction Stop
+                Add-AccountEmails -Value $jwtPayload -Emails $Emails -Depth ($Depth + 1)
+            } catch { }
+        }
+
+        try {
+            $parsed = $text | ConvertFrom-Json -ErrorAction Stop
+            if ($parsed -isnot [string]) { Add-AccountEmails -Value $parsed -Emails $Emails -Depth ($Depth + 1) }
+        } catch { }
+        return
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) {
+            if ([string]$key -match '(?i)^email$') {
+                Add-AccountEmails -Value $Value[$key] -Emails $Emails -Depth ($Depth + 1)
+            } else {
+                Add-AccountEmails -Value $Value[$key] -Emails $Emails -Depth ($Depth + 1)
+            }
+        }
+        return
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        foreach ($item in $Value) { Add-AccountEmails -Value $item -Emails $Emails -Depth ($Depth + 1) }
+        return
+    }
+
+    foreach ($property in $Value.PSObject.Properties) {
+        Add-AccountEmails -Value $property.Value -Emails $Emails -Depth ($Depth + 1)
+    }
+}
+
+function Get-UniqueEmails {
+    param($Value)
+    $emails = [System.Collections.Generic.List[string]]::new()
+    Add-AccountEmails -Value $Value -Emails $emails
+    return @($emails | Sort-Object -Unique)
+}
+
+function Get-StateFileValue {
+    param($State, [string]$RelativePath)
+    if ($State.Files -is [System.Collections.IDictionary]) {
+        return $State.Files[$RelativePath]
+    }
+    $property = $State.Files.PSObject.Properties[$RelativePath]
+    if ($property) { return $property.Value }
+
+    # Compatibility with 2.4.5 snapshots, which used flat file names.
+    $legacyName = Split-Path -Leaf $RelativePath
+    $legacyProperty = $State.Files.PSObject.Properties[$legacyName]
+    if ($legacyProperty) { return $legacyProperty.Value }
+    return $null
+}
+
+function Test-StateFileKey {
+    param($State, [string]$RelativePath)
+    if ($State.Files -is [System.Collections.IDictionary]) {
+        if ($State.Files.Contains($RelativePath)) { return $true }
+        return $false
+    }
+    if ($State.Files.PSObject.Properties[$RelativePath]) { return $true }
+    return [bool]$State.Files.PSObject.Properties[(Split-Path -Leaf $RelativePath)]
+}
+
+function Get-CliStateAccountEmail {
+    param($State)
+
+    if ($State.Credential) {
+        $credentialBytes = [Convert]::FromBase64String([string]$State.Credential)
+        $credentialText = [Text.Encoding]::UTF8.GetString($credentialBytes)
+        $emails = @(Get-UniqueEmails -Value $credentialText)
+        if ($emails.Count -eq 1) { return $emails[0] }
+        if ($emails.Count -gt 1) { throw "The CLI credential contains more than one account email; refusing an ambiguous profile." }
+    }
+
+    foreach ($relativePath in @("antigravity-cli/token.json", "antigravity-oauth-token", "oauth_creds.json", "google_accounts.json")) {
+        $encoded = Get-StateFileValue -State $State -RelativePath $relativePath
+        if (-not $encoded) { continue }
+        $bytes = [Convert]::FromBase64String([string]$encoded)
+        $sourceEmails = @(Get-UniqueEmails -Value ([Text.Encoding]::UTF8.GetString($bytes)))
+        if ($sourceEmails.Count -eq 1) { return $sourceEmails[0] }
+        if ($sourceEmails.Count -gt 1 -and $relativePath -ne "google_accounts.json") {
+            throw "The CLI file '$relativePath' contains multiple account emails; refusing an ambiguous profile."
+        }
+    }
+    return $null
+}
+
+function Get-CliProfileEmail {
+    param([string]$ProfilePath)
+    $identityPath = Join-Path $ProfilePath "cli\identity.json"
+    if (Test-Path -LiteralPath $identityPath -PathType Leaf) {
+        $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+        return [string]$identity.AccountEmail
+    }
+    $legacyStatePath = Join-Path $ProfilePath "cli-state.json"
+    if (Test-Path -LiteralPath $legacyStatePath -PathType Leaf) {
+        $legacyState = Get-Content -LiteralPath $legacyStatePath -Raw | ConvertFrom-Json
+        if ($legacyState.AccountEmail) { return [string]$legacyState.AccountEmail }
+        return Get-CliStateAccountEmail -State $legacyState
+    }
+    return $null
+}
+
 function Get-CliState {
     param([switch]$AllowMissingCredential)
 
@@ -173,19 +311,29 @@ function Get-CliState {
     }
 
     $files = @{}
-    foreach ($fileName in (@("antigravity-oauth-token") + $GeminiOAuthFiles)) {
-        $filePath = Join-Path $GeminiDirectory $fileName
+    foreach ($relativePath in $CliStateRelativePaths) {
+        $filePath = Join-Path $GeminiDirectory ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
         if (Test-Path -LiteralPath $filePath -PathType Leaf) {
-            $files[$fileName] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filePath))
+            $files[$relativePath] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filePath))
         } else {
-            $files[$fileName] = $null
+            $files[$relativePath] = $null
         }
     }
 
-    return @{
+    $state = @{
         Credential = if ($secret) { [Convert]::ToBase64String($secret) } else { $null }
         Files = $files
     }
+    try {
+        $state.AccountEmail = Get-CliStateAccountEmail -State $state
+    } catch {
+        if (-not $AllowMissingCredential) { throw }
+        $state.AccountEmail = $null
+    }
+    if (-not $AllowMissingCredential -and -not $state.AccountEmail) {
+        throw "Could not identify the CLI account email from the saved credential files. The profile was not saved."
+    }
+    return $state
 }
 
 function Write-AtomicBytes {
@@ -215,20 +363,102 @@ function Restore-CliState {
         [AntigravityCredentialStore]::DeleteSecret($CredentialTarget)
     }
 
-    foreach ($fileName in (@("antigravity-oauth-token") + $GeminiOAuthFiles)) {
-        $filePath = Join-Path $GeminiDirectory $fileName
-        if ($State.Files -is [System.Collections.IDictionary]) {
-            $encoded = $State.Files[$fileName]
-        } else {
-            $fileProperty = $State.Files.PSObject.Properties[$fileName]
-            $encoded = if ($fileProperty) { $fileProperty.Value } else { $null }
+    foreach ($relativePath in $CliStateRelativePaths) {
+        $filePath = Join-Path $GeminiDirectory ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        if ($State.Legacy -and -not (Test-StateFileKey -State $State -RelativePath $relativePath)) {
+            continue
         }
+        $encoded = Get-StateFileValue -State $State -RelativePath $relativePath
         if ($encoded) {
             Write-AtomicBytes -Path $filePath -Bytes ([Convert]::FromBase64String([string]$encoded))
         } elseif (Test-Path -LiteralPath $filePath -PathType Leaf) {
             Remove-Item -LiteralPath $filePath -Force
         }
     }
+}
+
+function Save-CliProfileState {
+    param([string]$ProfilePath, $State)
+
+    $cliRoot = Join-Path $ProfilePath "cli"
+    $filesRoot = Join-Path $cliRoot "files"
+    New-Item -ItemType Directory -Path $filesRoot -Force | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $cliRoot "credential.bin"), [Convert]::FromBase64String([string]$State.Credential))
+
+    $storedFiles = @()
+    foreach ($relativePath in $CliStateRelativePaths) {
+        $encoded = Get-StateFileValue -State $State -RelativePath $relativePath
+        if (-not $encoded) { continue }
+        $filePath = Join-Path $filesRoot ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        $bytes = [Convert]::FromBase64String([string]$encoded)
+        Write-AtomicBytes -Path $filePath -Bytes $bytes
+        $storedFiles += $relativePath
+    }
+
+    $identity = @{
+        Version = 1
+        AccountEmail = [string]$State.AccountEmail
+        CredentialUser = $CredentialUser
+        Files = $storedFiles
+    }
+    $identity | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $cliRoot "identity.json") -Encoding UTF8
+}
+
+function Read-CliProfileState {
+    param([string]$ProfilePath)
+
+    $legacyStatePath = Join-Path $ProfilePath "cli-state.json"
+    if (Test-Path -LiteralPath $legacyStatePath -PathType Leaf) {
+        $legacyData = Get-Content -LiteralPath $legacyStatePath -Raw | ConvertFrom-Json
+        return @{
+            Credential = $legacyData.Credential
+            Files = $legacyData.Files
+            AccountEmail = Get-CliStateAccountEmail -State $legacyData
+            Legacy = $true
+        }
+    }
+
+    $cliRoot = Join-Path $ProfilePath "cli"
+    $credentialPath = Join-Path $cliRoot "credential.bin"
+    $identityPath = Join-Path $cliRoot "identity.json"
+    if (-not (Test-Path -LiteralPath $credentialPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
+        throw "Profile '$([IO.Path]::GetFileName($ProfilePath))' does not contain a complete CLI account snapshot. Save it again while that account is active."
+    }
+
+    $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+    $files = @{}
+    foreach ($relativePath in $CliStateRelativePaths) {
+        $filePath = Join-Path $cliRoot ("files\" + $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        if (Test-Path -LiteralPath $filePath -PathType Leaf) {
+            $files[$relativePath] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filePath))
+        } else {
+            $files[$relativePath] = $null
+        }
+    }
+
+    return @{
+        Credential = [Convert]::ToBase64String([IO.File]::ReadAllBytes($credentialPath))
+        Files = $files
+        AccountEmail = [string]$identity.AccountEmail
+    }
+}
+
+function Assert-CliStateIdentity {
+    param($State, [string]$ProfileName)
+
+    if (-not $State.Credential) {
+        throw "Profile '$ProfileName' is missing its Windows credential. Save it again while that account is active."
+    }
+    $actualEmail = Get-CliStateAccountEmail -State $State
+    $expectedEmail = [string]$State.AccountEmail
+    if (-not $actualEmail -or -not $expectedEmail) {
+        throw "Profile '$ProfileName' has no verifiable account email. Re-save it while signed in to that CLI account."
+    }
+    if ($actualEmail -ne $expectedEmail.Trim().ToLowerInvariant()) {
+        throw "Profile '$ProfileName' identity mismatch: its stored account email does not match its credential files."
+    }
+    return $actualEmail
 }
 
 function Save-Profile {
@@ -249,7 +479,7 @@ function Save-Profile {
     try {
         if ($Target -eq "agy") {
             $state = Get-CliState
-            $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stagingPath "cli-state.json") -Encoding UTF8
+            Save-CliProfileState -ProfilePath $stagingPath -State $state
         } else {
             if (-not (Test-Path -LiteralPath $UserDataPath -PathType Container)) {
                 throw "User Data directory not found at: $UserDataPath"
@@ -283,14 +513,8 @@ function Switch-Profile {
     }
 
     if ($Target -eq "agy") {
-        $statePath = Join-Path $profilePath "cli-state.json"
-        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
-            throw "Profile '$Name' does not contain an Antigravity CLI credential snapshot."
-        }
-        $newState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-        if (-not $newState.Credential) {
-            throw "Profile '$Name' is missing its Windows credential. Save it again while that account is active."
-        }
+        $newState = Read-CliProfileState -ProfilePath $profilePath
+        $accountEmail = Assert-CliStateIdentity -State $newState -ProfileName $Name
 
         $oldState = Get-CliState -AllowMissingCredential
         try {

@@ -5,7 +5,7 @@ const fs = require('fs');
 
 /**
  * Antigravity Multi-Account Switcher
- * Version 2.4.5
+ * Version 2.4.6
  * 
  * Features:
  * - Compact status bar menu for profiles, targets, and profile actions
@@ -15,7 +15,7 @@ const fs = require('fs');
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Antigravity Account Switcher v2.4.5 is now active - compact account menu');
+    console.log('Antigravity Account Switcher v2.4.6 is now active - compact account menu');
 
     const scriptPath = path.join(context.extensionPath, 'scripts', 'profile_manager.ps1');
     const MAX_PROFILES = 8;
@@ -460,7 +460,10 @@ function activate(context) {
             const isMarkedActive = activeName && activeName.toLowerCase() === name.toLowerCase();
             return {
                 label: `${isMarkedActive ? '$(check) ' : '$(account) '}${name}`,
-                description: isMarkedActive ? 'Marked active in the switcher' : `Switch ${getTargetLabel(target)} to this profile`,
+                description: [
+                    isMarkedActive ? 'Marked active in the switcher' : `Switch ${getTargetLabel(target)} to this profile`,
+                    target === 'agy' && profile.AccountEmail ? profile.AccountEmail : null
+                ].filter(Boolean).join(' · '),
                 action: 'switch',
                 profileName: name
             };

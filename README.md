@@ -1,6 +1,6 @@
 # Antigravity Account Switcher
 
-**Version 2.4.5**
+**Version 2.4.6**
 
 Antigravity Account Switcher saves and restores local account profiles for Antigravity Classic, Antigravity IDE, and the Antigravity CLI (`agy`). Each target has its own profile list, with up to **8 profiles per target**.
 
@@ -12,7 +12,7 @@ Antigravity Account Switcher saves and restores local account profiles for Antig
 - Offers a status bar menu for switching, saving, deleting, and selecting a target.
 - Watches Antigravity diagnostics and logs for rate limit messages and offers a profile switch. Alerts have a one-minute cooldown.
 
-The extension does not identify or verify the Google account contained in a profile. The check mark in the menu only means that the profile is marked active by the switcher.
+For CLI profiles, the switcher extracts the account email from the saved credential or token files and shows it in the Account menu. Before restoring a CLI profile, it checks that the saved account identity matches the recorded email. The check mark only means that a profile is marked active by the switcher; it does not verify which account Antigravity currently uses.
 
 ## Targets and local data
 
@@ -22,7 +22,7 @@ The extension does not identify or verify the Google account contained in a prof
 | IDE | `%APPDATA%\Antigravity IDE\User` | `%APPDATA%\Antigravity\Profiles-ide\<name>` | Stops Antigravity, replaces `User`, then launches it with the IDE data root. |
 | CLI (`agy`) | Windows Credential Manager entry `gemini:antigravity` and the listed files under `%USERPROFILE%\.gemini` | `%APPDATA%\Antigravity\Profiles-agy\<name>` | Restores the saved credential state and reloads the current window. |
 
-CLI snapshots include the `antigravity-oauth-token`, `oauth_creds.json`, and `google_accounts.json` files when present. They also include the Windows Credential Manager secret used by Antigravity CLI. The snapshot is stored as `cli-state.json` in the profile directory; treat it as sensitive credential data and do not share it.
+CLI profiles include the Windows Credential Manager secret for `gemini:antigravity` and these files when present: `.gemini\antigravity-oauth-token`, `.gemini\oauth_creds.json`, `.gemini\google_accounts.json`, and `.gemini\antigravity-cli\token.json`. New snapshots are stored under `cli\` in each profile, with the credential in `credential.bin`, copied token files in `files\`, and account metadata in `identity.json`. Existing 2.4.5 `cli-state.json` profiles remain readable when an account email can be identified. These files contain usable credential material; keep the profile directories private and do not share them.
 
 Classic and IDE snapshots copy the full `User` directory, which can contain session data and other local settings. Keep profile directories private and delete profiles you no longer need.
 
@@ -37,18 +37,18 @@ Classic and IDE switches look for `Antigravity.exe` in `%LOCALAPPDATA%\Programs\
 
 ## Install from VSIX
 
-Build the package from this repository using the instructions below, or use the provided `antigravity-account-switcher-2.4.5.vsix` file:
+Build the package from this repository using the instructions below, or use the provided `antigravity-account-switcher-2.4.6.vsix` file:
 
 1. Open Antigravity.
 2. Open the Command Palette with `Ctrl+Shift+P`.
 3. Select **Extensions: Install from VSIX...**.
-4. Choose `antigravity-account-switcher-2.4.5.vsix`.
+4. Choose `antigravity-account-switcher-2.4.6.vsix`.
 5. Reload the window when prompted.
 
 You can also install it from PowerShell:
 
 ```powershell
-code --install-extension .\antigravity-account-switcher-2.4.5.vsix
+code --install-extension .\antigravity-account-switcher-2.4.6.vsix
 ```
 
 ## Build from source
@@ -59,7 +59,7 @@ From the repository directory, run:
 npx --yes @vscode/vsce package --no-dependencies
 ```
 
-This creates `antigravity-account-switcher-2.4.5.vsix`. Install it through the Command Palette or with the `code --install-extension` command above.
+This creates `antigravity-account-switcher-2.4.6.vsix`. Install it through the Command Palette or with the `code --install-extension` command above.
 
 ## Use the switcher
 
