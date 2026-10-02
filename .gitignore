@@ -2,3 +2,6 @@ node_modules/
 *.vsix
 vsix_build/
 .vscode-test/
+\[Content_Types\].xml
+[Content_Types].xml
+extension.vsixmanifest
