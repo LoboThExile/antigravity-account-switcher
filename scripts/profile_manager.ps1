@@ -20,7 +20,13 @@ param(
     [string]$Target = "classic",
 
     [Parameter(Mandatory=$false)]
-    [int]$MaxProfiles = 8
+    [int]$MaxProfiles = 8,
+
+    [Parameter(Mandatory=$false)]
+    [string]$CustomProfilesPath,
+
+    [Parameter(Mandatory=$false)]
+    [string]$AntigravityExePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,16 +37,36 @@ $AntigravityDataPath = if ($Target -eq "ide") {
     Join-Path $AppDataPath "Antigravity"
 }
 $UserDataPath = Join-Path $AntigravityDataPath "User"
-$ProfilesStorePath = if ($Target -eq "classic") {
+$ProfilesStorePath = if (-not [string]::IsNullOrWhiteSpace($CustomProfilesPath)) {
+    $CustomProfilesPath
+} elseif ($Target -eq "classic") {
     Join-Path $AppDataPath "Antigravity\Profiles"
 } else {
     Join-Path $AppDataPath "Antigravity\Profiles-$Target"
 }
 $GeminiDirectory = Join-Path $env:USERPROFILE ".gemini"
-$AntigravityExeCandidates = @(
+$candidates = [System.Collections.Generic.List[string]]::new()
+if (-not [string]::IsNullOrWhiteSpace($AntigravityExePath) -and (Test-Path -LiteralPath $AntigravityExePath -PathType Leaf)) {
+    $candidates.Add($AntigravityExePath)
+}
+foreach ($candidatePath in @(
     (Join-Path $env:LOCALAPPDATA "Programs\antigravity\Antigravity.exe"),
     (Join-Path $env:PROGRAMFILES "Antigravity\Antigravity.exe")
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+)) {
+    if ($candidatePath -and (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+        $alreadyInList = $false
+        foreach ($c in $candidates) {
+            if ([string]::Equals($c, $candidatePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $alreadyInList = $true
+                break
+            }
+        }
+        if (-not $alreadyInList) {
+            $candidates.Add($candidatePath)
+        }
+    }
+}
+$AntigravityExeCandidates = @($candidates)
 $CredentialTarget = "gemini:antigravity"
 $CredentialUser = "antigravity"
 $CliStateRelativePaths = @(
@@ -211,11 +237,7 @@ function Add-AccountEmails {
 
     if ($Value -is [System.Collections.IDictionary]) {
         foreach ($key in $Value.Keys) {
-            if ([string]$key -match '(?i)^email$') {
-                Add-AccountEmails -Value $Value[$key] -Emails $Emails -Depth ($Depth + 1)
-            } else {
-                Add-AccountEmails -Value $Value[$key] -Emails $Emails -Depth ($Depth + 1)
-            }
+            Add-AccountEmails -Value $Value[$key] -Emails $Emails -Depth ($Depth + 1)
         }
         return
     }
@@ -363,6 +385,7 @@ function Restore-CliState {
         [AntigravityCredentialStore]::DeleteSecret($CredentialTarget)
     }
 
+    $cliBackupDir = $null
     foreach ($relativePath in $CliStateRelativePaths) {
         $filePath = Join-Path $GeminiDirectory ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
         if ($State.Legacy -and -not (Test-StateFileKey -State $State -RelativePath $relativePath)) {
@@ -372,7 +395,16 @@ function Restore-CliState {
         if ($encoded) {
             Write-AtomicBytes -Path $filePath -Bytes ([Convert]::FromBase64String([string]$encoded))
         } elseif (Test-Path -LiteralPath $filePath -PathType Leaf) {
-            Remove-Item -LiteralPath $filePath -Force
+            if ($null -eq $cliBackupDir) {
+                $cliBackupDir = Join-Path $GeminiDirectory "backup_$([guid]::NewGuid().ToString('N'))"
+                New-Item -ItemType Directory -Path $cliBackupDir -Force | Out-Null
+            }
+            $destBackupPath = Join-Path $cliBackupDir ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+            $destParent = Split-Path -Parent $destBackupPath
+            if (-not (Test-Path -LiteralPath $destParent)) {
+                New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+            }
+            Move-Item -LiteralPath $filePath -Destination $destBackupPath -Force
         }
     }
 }
@@ -512,6 +544,19 @@ function Switch-Profile {
         throw "Profile '$Name' not found for target '$Target'."
     }
 
+    # Write active profile before stopping Antigravity for atomicity
+    $activeSuffix = if ($Target -eq "classic") { "" } else { "_$Target" }
+    $activeDir = Join-Path $AppDataPath "Antigravity"
+    $activeFile = Join-Path $activeDir "active_profile$activeSuffix.txt"
+    try {
+        if (-not (Test-Path -LiteralPath $activeDir)) {
+            New-Item -ItemType Directory -Path $activeDir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($activeFile, $Name, [System.Text.Encoding]::UTF8)
+    } catch {
+        Write-Warning "Could not write active profile file: $_"
+    }
+
     if ($Target -eq "agy") {
         $newState = Read-CliProfileState -ProfilePath $profilePath
         $accountEmail = Assert-CliStateIdentity -State $newState -ProfileName $Name
@@ -565,9 +610,26 @@ function Stop-Antigravity {
         throw "Could not find Antigravity.exe. The profile was not switched."
     }
 
-    $processes = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)
-    if ($processes.Count -gt 0) {
-        $processes | Stop-Process -Force
+    $processNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    [void]$processNames.Add("Antigravity")
+    foreach ($cand in $AntigravityExeCandidates) {
+        try {
+            $nameWithoutExt = [System.IO.Path]::GetFileNameWithoutExtension($cand)
+            if (-not [string]::IsNullOrWhiteSpace($nameWithoutExt)) {
+                [void]$processNames.Add($nameWithoutExt)
+            }
+        } catch { }
+    }
+
+    $stoppedAny = $false
+    foreach ($pName in $processNames) {
+        $processes = @(Get-Process -Name $pName -ErrorAction SilentlyContinue)
+        if ($processes.Count -gt 0) {
+            $processes | Stop-Process -Force
+            $stoppedAny = $true
+        }
+    }
+    if ($stoppedAny) {
         Start-Sleep -Seconds 3
     }
 }
@@ -580,12 +642,16 @@ function Start-Antigravity {
     # The IDE target uses its own Electron user-data root. Passing it explicitly
     # ensures the relaunched app reads the same User folder that was switched.
     Start-Sleep -Seconds 1
-    $launchArguments = if ($Target -eq "ide") {
-        "`"$exePath`" --user-data-dir=`"$AntigravityDataPath`""
+    $argList = if ($Target -eq "ide") {
+        @("--user-data-dir=$AntigravityDataPath")
     } else {
-        "`"$exePath`""
+        @()
     }
-    Start-Process "explorer.exe" -ArgumentList $launchArguments
+    if ($argList.Count -gt 0) {
+        Start-Process -FilePath $exePath -ArgumentList $argList
+    } else {
+        Start-Process -FilePath $exePath
+    }
 }
 
 function Remove-Profile {

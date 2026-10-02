@@ -18,7 +18,19 @@ function activate(context) {
     console.log('Antigravity Account Switcher v2.4.6 is now active - compact account menu');
 
     const scriptPath = path.join(context.extensionPath, 'scripts', 'profile_manager.ps1');
-    const MAX_PROFILES = 8;
+    const DEFAULT_MAX_PROFILES = 8;
+
+    function getMaxProfiles() {
+        const config = vscode.workspace.getConfiguration('antigravitySwitcher');
+        return config.get('maxProfiles', DEFAULT_MAX_PROFILES);
+    }
+
+    function getCustomProfilesPath() {
+        const config = vscode.workspace.getConfiguration('antigravitySwitcher');
+        const customDir = config.get('profilesDirectory', '');
+        return customDir && customDir.trim() ? customDir.trim() : '';
+    }
+
     const TARGETS = [
         { id: 'classic', label: 'Antigravity Classic' },
         { id: 'ide', label: 'Antigravity IDE' },
@@ -270,7 +282,23 @@ function activate(context) {
      */
     function runProfileManager(action, profileName = '', target = selectedTarget) {
         return new Promise((resolve) => {
-            const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Action', action, '-Target', target];
+            const maxProfiles = getMaxProfiles();
+            const customProfilesPath = getCustomProfilesPath();
+
+            const args = [
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', scriptPath,
+                '-Action', action,
+                '-Target', target,
+                '-MaxProfiles', String(maxProfiles)
+            ];
+            if (process.execPath) {
+                args.push('-AntigravityExePath', process.execPath);
+            }
+            if (customProfilesPath) {
+                args.push('-CustomProfilesPath', customProfilesPath);
+            }
             if (profileName) {
                 args.push('-ProfileName', profileName);
             }
@@ -343,16 +371,34 @@ function activate(context) {
 
     /** Ask before replacing profile data; app targets restart Antigravity themselves. */
     async function switchToProfile(profileName, target = selectedTarget) {
-        const confirmationText = target === 'agy'
-            ? `Switch ${getTargetLabel(target)} to "${profileName}" and reload this window? Save any open work first.`
-            : `Switch ${getTargetLabel(target)} to "${profileName}"? Antigravity will close and restart. Save any open work first.`;
-        const confirmationLabel = target === 'agy' ? 'Switch and Reload' : 'Switch and Restart';
-        const confirmation = await vscode.window.showWarningMessage(
-            confirmationText,
-            { modal: true },
-            confirmationLabel
-        );
-        if (confirmation !== confirmationLabel) return;
+        const activeName = getActiveProfile(target);
+        const isAlreadyActive = activeName && activeName.toLowerCase() === profileName.toLowerCase();
+
+        if (isAlreadyActive) {
+            const promptText = `"${profileName}" is already the active profile. Reload anyway?`;
+            const reloadLabel = 'Reload anyway';
+            const proceed = await vscode.window.showWarningMessage(
+                promptText,
+                { modal: true },
+                reloadLabel
+            );
+            if (proceed !== reloadLabel) return;
+        } else {
+            const confirmationText = target === 'agy'
+                ? `Switch ${getTargetLabel(target)} to "${profileName}" and reload this window? Save any open work first.`
+                : `Switch ${getTargetLabel(target)} to "${profileName}"? Antigravity will close and restart. Save any open work first.`;
+            const confirmationLabel = target === 'agy' ? 'Switch and Reload' : 'Switch and Restart';
+            const confirmation = await vscode.window.showWarningMessage(
+                confirmationText,
+                { modal: true },
+                confirmationLabel
+            );
+            if (confirmation !== confirmationLabel) return;
+        }
+
+        saveFullWorkspaceState();
+        const previousActive = getActiveProfile(target);
+        setActiveProfile(profileName, target);
 
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
@@ -361,11 +407,13 @@ function activate(context) {
         }, async () => {
             const result = await runProfileManager('Load', profileName, target);
             if (!result.success) {
+                if (previousActive) {
+                    setActiveProfile(previousActive, target);
+                }
                 vscode.window.showErrorMessage(`Failed to switch: ${result.error}`);
                 return;
             }
 
-            setActiveProfile(profileName, target);
             await updateAccountButton();
             if (target === 'agy') {
                 await vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -377,30 +425,24 @@ function activate(context) {
     // RATE LIMIT MONITORING
     // ============================================
 
-    // Monitor diagnostic messages for rate limit errors
-    const diagnosticListener = vscode.languages.onDidChangeDiagnostics((e) => {
-        for (const uri of e.uris) {
-            const diagnostics = vscode.languages.getDiagnostics(uri);
-            for (const diag of diagnostics) {
-                if (containsRateLimitError(diag.message)) {
-                    handleRateLimitDetected();
-                    return;
-                }
-            }
-        }
-    });
-    context.subscriptions.push(diagnosticListener);
-
     // Monitor log file for rate limit errors (poll every 30 seconds)
     let lastLogSize = 0;
+    let lastLogFile = null;
     const logCheckInterval = setInterval(async () => {
         try {
-            const logsDir = path.join(process.env.APPDATA || '', 'Antigravity', 'logs');
+            const appFolder = selectedTarget === 'ide' ? 'Antigravity IDE' : 'Antigravity';
+            const logsDir = path.join(process.env.APPDATA || '', appFolder, 'logs');
             if (!fs.existsSync(logsDir)) return;
 
             // Find most recent log directory
             const logDirs = fs.readdirSync(logsDir)
-                .filter(f => fs.statSync(path.join(logsDir, f)).isDirectory())
+                .filter(f => {
+                    try {
+                        return fs.statSync(path.join(logsDir, f)).isDirectory();
+                    } catch {
+                        return false;
+                    }
+                })
                 .sort()
                 .reverse();
 
@@ -409,19 +451,38 @@ function activate(context) {
             const mainLog = path.join(logsDir, logDirs[0], 'main.log');
             if (!fs.existsSync(mainLog)) return;
 
+            // Reset offset if log file changed
+            if (lastLogFile !== mainLog) {
+                lastLogFile = mainLog;
+                lastLogSize = 0;
+            }
+
             const stats = fs.statSync(mainLog);
-            if (stats.size <= lastLogSize) return;
+            // Handle log rotation or truncation
+            if (stats.size < lastLogSize) {
+                lastLogSize = 0;
+            }
+            if (stats.size === lastLogSize) return;
 
-            // Read new content
+            // Read new content in safe chunks without skipping unread content
             const fd = fs.openSync(mainLog, 'r');
-            const buffer = Buffer.alloc(Math.min(stats.size - lastLogSize, 10000));
-            fs.readSync(fd, buffer, 0, buffer.length, lastLogSize);
-            fs.closeSync(fd);
-            lastLogSize = stats.size;
+            try {
+                let unreadLength = stats.size - lastLogSize;
+                // Cap single-read buffer at 1MB to prevent excessive memory allocation
+                if (unreadLength > 1024 * 1024) {
+                    lastLogSize = stats.size - 1024 * 1024;
+                    unreadLength = 1024 * 1024;
+                }
+                const buffer = Buffer.alloc(unreadLength);
+                const bytesRead = fs.readSync(fd, buffer, 0, unreadLength, lastLogSize);
+                lastLogSize += bytesRead;
 
-            const newContent = buffer.toString('utf8');
-            if (containsRateLimitError(newContent)) {
-                handleRateLimitDetected();
+                const newContent = buffer.subarray(0, bytesRead).toString('utf8');
+                if (containsRateLimitError(newContent)) {
+                    handleRateLimitDetected();
+                }
+            } finally {
+                fs.closeSync(fd);
             }
         } catch (e) {
             // Ignore log reading errors
@@ -441,13 +502,14 @@ function activate(context) {
     async function updateAccountButton() {
         const target = selectedTarget;
         const profiles = await getProfiles(target);
+        const maxProfiles = getMaxProfiles();
         const targetShort = target === 'agy' ? 'CLI' : target === 'ide' ? 'IDE' : 'Classic';
         const activeName = getActiveProfile(target);
         const hasActive = activeName && profiles.some(profile =>
             (profile.Name || profile.name).toLowerCase() === activeName.toLowerCase()
         );
         accountButton.text = `$(account) ${targetShort}`;
-        accountButton.tooltip = `${getTargetLabel(target)}${hasActive ? ` · ${activeName}` : ''} · ${profiles.length}/${MAX_PROFILES} profiles · click for accounts and actions`;
+        accountButton.tooltip = `${getTargetLabel(target)}${hasActive ? ` · ${activeName}` : ''} · ${profiles.length}/${maxProfiles} profiles · click for accounts and actions`;
         accountButton.show();
     }
 
@@ -515,10 +577,11 @@ function activate(context) {
     const saveCmd = vscode.commands.registerCommand('antigravity-switcher.saveProfile', async () => {
         const target = selectedTarget;
         const profiles = await getProfiles(target);
+        const maxProfiles = getMaxProfiles();
 
-        if (profiles.length >= MAX_PROFILES) {
+        if (profiles.length >= maxProfiles) {
             vscode.window.showWarningMessage(
-                `All ${MAX_PROFILES} profile slots are full for ${getTargetLabel(target)}. Delete a profile first.`
+                `All ${maxProfiles} profile slots are full for ${getTargetLabel(target)}. Delete a profile first.`
             );
             return;
         }
