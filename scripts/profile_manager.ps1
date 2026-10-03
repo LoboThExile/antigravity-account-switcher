@@ -85,6 +85,27 @@ Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
 $DpapiEntropy = [System.Text.Encoding]::UTF8.GetBytes("Antigravity:AccountSwitcher:DPAPI:v1")
 $DpapiMagicHeader = [System.Text.Encoding]::ASCII.GetBytes("AGY_DPAPI_V1`0")
 
+$ClassicExcludedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($name in @(
+    "Profiles", "Profiles-ide", "Profiles-agy", "logs", "bin",
+    "active_profile.txt", "active_profile_ide.txt", "active_profile_agy.txt",
+    "pending_state.json", "Crashpad"
+)) {
+    [void]$ClassicExcludedNames.Add($name)
+}
+
+function Test-IsExcludedClassicItem {
+    param([string]$ItemName)
+    if ($ClassicExcludedNames.Contains($ItemName)) { return $true }
+    if ($ItemName.StartsWith(".saving-") -or
+        $ItemName.StartsWith(".replaced-") -or
+        $ItemName.StartsWith(".switching_backup_") -or
+        $ItemName.Contains("_switching_backup_")) {
+        return $true
+    }
+    return $false
+}
+
 function Protect-ProfileDirectory {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return }
@@ -592,11 +613,18 @@ function Save-Profile {
         if ($Target -eq "agy") {
             $state = Get-CliState
             Save-CliProfileState -ProfilePath $stagingPath -State $state
-        } else {
+        } elseif ($Target -eq "ide" -or (Test-Path -LiteralPath $UserDataPath -PathType Container)) {
             if (-not (Test-Path -LiteralPath $UserDataPath -PathType Container)) {
                 throw "User Data directory not found at: $UserDataPath"
             }
             Get-ChildItem -LiteralPath $UserDataPath -Force | Copy-Item -Destination $stagingPath -Recurse -Force
+        } else {
+            if (-not (Test-Path -LiteralPath $AntigravityDataPath -PathType Container)) {
+                throw "Antigravity data directory not found at: $AntigravityDataPath"
+            }
+            Get-ChildItem -LiteralPath $AntigravityDataPath -Force | Where-Object {
+                -not (Test-IsExcludedClassicItem -ItemName $_.Name)
+            } | Copy-Item -Destination $stagingPath -Recurse -Force
         }
 
         if ($profileExists) { Move-Item -LiteralPath $targetPath -Destination $backupPath }
@@ -649,7 +677,7 @@ function Switch-Profile {
             try { Restore-CliState $oldState } catch { Write-Warning "Could not fully restore the previous CLI credential state." }
             throw
         }
-    } else {
+    } elseif ($Target -eq "ide" -or (Test-Path -LiteralPath $UserDataPath -PathType Container)) {
         Stop-Antigravity
         $backupPath = "${UserDataPath}_switching_backup_$([guid]::NewGuid().ToString('N'))"
         if (Test-Path -LiteralPath $UserDataPath) {
@@ -672,6 +700,39 @@ function Switch-Profile {
 
         if (Test-Path -LiteralPath $backupPath) {
             Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Start-Antigravity
+    } else {
+        Stop-Antigravity
+        $backupDir = Join-Path $AntigravityDataPath ".switching_backup_$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+
+        Get-ChildItem -LiteralPath $AntigravityDataPath -Force | Where-Object {
+            -not (Test-IsExcludedClassicItem -ItemName $_.Name)
+        } | ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination $backupDir -Force
+        }
+
+        try {
+            Get-ChildItem -LiteralPath $profilePath -Force | Copy-Item -Destination $AntigravityDataPath -Recurse -Force -ErrorAction Stop
+        } catch {
+            Get-ChildItem -LiteralPath $AntigravityDataPath -Force | Where-Object {
+                -not (Test-IsExcludedClassicItem -ItemName $_.Name)
+            } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+            Get-ChildItem -LiteralPath $backupDir -Force | ForEach-Object {
+                Move-Item -LiteralPath $_.FullName -Destination $AntigravityDataPath -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path -LiteralPath $backupDir) {
+                Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            try { Start-Antigravity } catch { Write-Warning "Could not restart Antigravity after restoring the previous profile." }
+            throw
+        }
+
+        if (Test-Path -LiteralPath $backupDir) {
+            Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         Start-Antigravity
