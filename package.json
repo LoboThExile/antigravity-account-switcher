@@ -2,7 +2,7 @@
   "name": "antigravity-account-switcher",
   "displayName": "Antigravity Account Switcher",
   "description": "Switch Google account profiles across Antigravity Classic, IDE, and CLI",
-  "version": "2.4.6",
+  "version": "2.4.7",
   "publisher": "albid0minator",
   "license": "MIT",
   "repository": {

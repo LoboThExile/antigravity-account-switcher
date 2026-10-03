@@ -5,7 +5,7 @@ const fs = require('fs');
 
 /**
  * Antigravity Multi-Account Switcher
- * Version 2.4.6
+ * Version 2.4.7
  * 
  * Features:
  * - Compact status bar menu for profiles, targets, and profile actions
@@ -15,7 +15,7 @@ const fs = require('fs');
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Antigravity Account Switcher v2.4.6 is now active - compact account menu');
+    console.log('Antigravity Account Switcher v2.4.7 is now active - compact account menu');
 
     const scriptPath = path.join(context.extensionPath, 'scripts', 'profile_manager.ps1');
     const DEFAULT_MAX_PROFILES = 8;

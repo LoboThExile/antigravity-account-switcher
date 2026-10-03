@@ -1,6 +1,6 @@
 # Antigravity Account Switcher
 
-**Version 2.4.6**
+**Version 2.4.7**
 
 Antigravity Account Switcher saves and restores local account profiles for Antigravity Classic, Antigravity IDE, and the Antigravity CLI (`agy`). Each target has its own profile list, with up to **8 profiles per target**.
 
@@ -22,9 +22,9 @@ For CLI profiles, the switcher extracts the account email from the saved credent
 | IDE | `%APPDATA%\Antigravity IDE\User` | `%APPDATA%\Antigravity\Profiles-ide\<name>` | Stops Antigravity, replaces `User`, then launches it with the IDE data root. |
 | CLI (`agy`) | Windows Credential Manager entry `gemini:antigravity` and the listed files under `%USERPROFILE%\.gemini` | `%APPDATA%\Antigravity\Profiles-agy\<name>` | Restores the saved credential state and reloads the current window. |
 
-CLI profiles include the Windows Credential Manager secret for `gemini:antigravity` and these files when present: `.gemini\antigravity-oauth-token`, `.gemini\oauth_creds.json`, `.gemini\google_accounts.json`, and `.gemini\antigravity-cli\token.json`. New snapshots are stored under `cli\` in each profile, with the credential in `credential.bin`, copied token files in `files\`, and account metadata in `identity.json`. Existing 2.4.5 `cli-state.json` profiles remain readable when an account email can be identified. These files contain usable credential material; keep the profile directories private and do not share them.
+CLI profiles snapshot the Windows Credential Manager secret for `gemini:antigravity` and auth files under `%USERPROFILE%\.gemini` (`antigravity-oauth-token`, `oauth_creds.json`, `google_accounts.json`, and `antigravity-cli\token.json`). Snapshots are stored under `cli\` in each profile, with the credential in `credential.bin`, copied token files in `files\`, and account metadata in `identity.json`. All sensitive tokens and credentials are **encrypted at rest using Windows DPAPI** (`ProtectedData`, CurrentUser scope), and profile folders have explicit NTFS ACLs restricting access exclusively to the current user and SYSTEM. Existing unencrypted snapshots remain readable for seamless backward compatibility.
 
-Classic and IDE snapshots copy the full `User` directory, which can contain session data and other local settings. Keep profile directories private and delete profiles you no longer need.
+Classic and IDE snapshots copy the `User` directory, which can contain session data and other local settings. Profile folders are restricted via NTFS ACLs to the current Windows user. Keep profile directories private and delete profiles you no longer need.
 
 ## Requirements
 

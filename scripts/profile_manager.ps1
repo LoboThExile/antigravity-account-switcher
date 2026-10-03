@@ -80,6 +80,78 @@ if (-not (Test-Path -LiteralPath $ProfilesStorePath)) {
     New-Item -ItemType Directory -Path $ProfilesStorePath -Force | Out-Null
 }
 
+Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+$DpapiEntropy = [System.Text.Encoding]::UTF8.GetBytes("Antigravity:AccountSwitcher:DPAPI:v1")
+$DpapiMagicHeader = [System.Text.Encoding]::ASCII.GetBytes("AGY_DPAPI_V1`0")
+
+function Protect-ProfileDirectory {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $systemUser = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+        $ruleUser = New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $ruleSystem = New-Object System.Security.AccessControl.FileSystemAccessRule($systemUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $acl.AddAccessRule($ruleUser)
+        $acl.AddAccessRule($ruleSystem)
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    } catch { }
+}
+
+function Protect-Bytes {
+    param([byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0) { return $Bytes }
+    try {
+        $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
+            $Bytes,
+            $DpapiEntropy,
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+        $combined = New-Object byte[] ($DpapiMagicHeader.Length + $encrypted.Length)
+        [Buffer]::BlockCopy($DpapiMagicHeader, 0, $combined, 0, $DpapiMagicHeader.Length)
+        [Buffer]::BlockCopy($encrypted, 0, $combined, $DpapiMagicHeader.Length, $encrypted.Length)
+        return $combined
+    } catch {
+        Write-Warning "DPAPI encryption failed: $_. Storing unencrypted."
+        return $Bytes
+    }
+}
+
+function Unprotect-Bytes {
+    param([byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Length -le $DpapiMagicHeader.Length) { return $Bytes }
+
+    $hasHeader = $true
+    for ($i = 0; $i -lt $DpapiMagicHeader.Length; $i++) {
+        if ($Bytes[$i] -ne $DpapiMagicHeader[$i]) {
+            $hasHeader = $false
+            break
+        }
+    }
+
+    if (-not $hasHeader) {
+        return $Bytes
+    }
+
+    try {
+        $payloadLen = $Bytes.Length - $DpapiMagicHeader.Length
+        $encrypted = New-Object byte[] $payloadLen
+        [Buffer]::BlockCopy($Bytes, $DpapiMagicHeader.Length, $encrypted, 0, $payloadLen)
+        return [System.Security.Cryptography.ProtectedData]::Unprotect(
+            $encrypted,
+            $DpapiEntropy,
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+    } catch {
+        throw "Could not decrypt profile credential using Windows DPAPI. Ensure you are signed into the same Windows user account that saved this profile."
+    }
+}
+
+Protect-ProfileDirectory -Path $ProfilesStorePath
+
 if ($Target -eq "agy") {
     if (-not ("AntigravityCredentialStore" -as [type])) {
         Add-Type -TypeDefinition @"
@@ -415,20 +487,25 @@ function Save-CliProfileState {
     $cliRoot = Join-Path $ProfilePath "cli"
     $filesRoot = Join-Path $cliRoot "files"
     New-Item -ItemType Directory -Path $filesRoot -Force | Out-Null
-    [IO.File]::WriteAllBytes((Join-Path $cliRoot "credential.bin"), [Convert]::FromBase64String([string]$State.Credential))
+    $rawCredentialBytes = [Convert]::FromBase64String([string]$State.Credential)
+    $protectedCredential = Protect-Bytes -Bytes $rawCredentialBytes
+    [IO.File]::WriteAllBytes((Join-Path $cliRoot "credential.bin"), $protectedCredential)
 
     $storedFiles = @()
     foreach ($relativePath in $CliStateRelativePaths) {
         $encoded = Get-StateFileValue -State $State -RelativePath $relativePath
         if (-not $encoded) { continue }
         $filePath = Join-Path $filesRoot ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
-        $bytes = [Convert]::FromBase64String([string]$encoded)
-        Write-AtomicBytes -Path $filePath -Bytes $bytes
+        $plainBytes = [Convert]::FromBase64String([string]$encoded)
+        $protectedFileBytes = Protect-Bytes -Bytes $plainBytes
+        Write-AtomicBytes -Path $filePath -Bytes $protectedFileBytes
         $storedFiles += $relativePath
     }
 
     $identity = @{
-        Version = 1
+        Version = 2
+        Encrypted = $true
+        EncryptionType = "DPAPI_CurrentUser"
         AccountEmail = [string]$State.AccountEmail
         CredentialUser = $CredentialUser
         Files = $storedFiles
@@ -459,18 +536,20 @@ function Read-CliProfileState {
     }
 
     $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+    $decryptedCredential = Unprotect-Bytes -Bytes ([IO.File]::ReadAllBytes($credentialPath))
     $files = @{}
     foreach ($relativePath in $CliStateRelativePaths) {
         $filePath = Join-Path $cliRoot ("files\" + $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
         if (Test-Path -LiteralPath $filePath -PathType Leaf) {
-            $files[$relativePath] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filePath))
+            $decryptedFileBytes = Unprotect-Bytes -Bytes ([IO.File]::ReadAllBytes($filePath))
+            $files[$relativePath] = [Convert]::ToBase64String($decryptedFileBytes)
         } else {
             $files[$relativePath] = $null
         }
     }
 
     return @{
-        Credential = [Convert]::ToBase64String([IO.File]::ReadAllBytes($credentialPath))
+        Credential = [Convert]::ToBase64String($decryptedCredential)
         Files = $files
         AccountEmail = [string]$identity.AccountEmail
     }
@@ -507,6 +586,7 @@ function Save-Profile {
     $stagingPath = Join-Path $ProfilesStorePath ".saving-$([guid]::NewGuid().ToString('N'))"
     $backupPath = Join-Path $ProfilesStorePath ".replaced-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $stagingPath -Force | Out-Null
+    Protect-ProfileDirectory -Path $stagingPath
 
     try {
         if ($Target -eq "agy") {
@@ -522,6 +602,7 @@ function Save-Profile {
         if ($profileExists) { Move-Item -LiteralPath $targetPath -Destination $backupPath }
         try {
             Move-Item -LiteralPath $stagingPath -Destination $targetPath
+            Protect-ProfileDirectory -Path $targetPath
         } catch {
             if (Test-Path -LiteralPath $backupPath) { Move-Item -LiteralPath $backupPath -Destination $targetPath }
             throw
