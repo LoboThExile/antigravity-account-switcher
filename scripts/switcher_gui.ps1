@@ -1,4 +1,4 @@
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing, System.Windows.Forms -ErrorAction SilentlyContinue
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction SilentlyContinue
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendScript = Join-Path $ScriptDir "profile_manager.ps1"
@@ -34,7 +34,7 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Antigravity Account Switcher"
-        Height="620" Width="480"
+        Height="620" Width="500"
         WindowStartupLocation="CenterScreen"
         Background="#18181b"
         Foreground="#f4f4f5"
@@ -46,7 +46,7 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
             <Setter Property="Foreground" Value="#f4f4f5"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="BorderBrush" Value="#3f3f46"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Padding" Value="12,6"/>
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -56,7 +56,7 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -69,6 +69,13 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#27272a"/>
+            <Setter Property="Foreground" Value="#f4f4f5"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="FontSize" Value="13"/>
         </Style>
     </Window.Resources>
 
@@ -83,11 +90,8 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
 
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="🚀" FontSize="22" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                <TextBlock Text="Antigravity Switcher" FontSize="20" FontWeight="Bold" Foreground="#f4f4f5" VerticalAlignment="Center"/>
-            </StackPanel>
-            <TextBlock Text="Switch Google accounts safely across Antigravity Classic, IDE, and CLI" FontSize="12" Foreground="#a1a1aa" Margin="0,4,0,0"/>
+            <TextBlock Text="Antigravity Account Switcher" FontSize="18" FontWeight="SemiBold" Foreground="#f4f4f5"/>
+            <TextBlock Text="Manage and switch Google account profiles for Classic, IDE, and CLI" FontSize="12" Foreground="#a1a1aa" Margin="0,3,0,0"/>
         </StackPanel>
 
         <!-- Target Selector Card -->
@@ -97,8 +101,8 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Target Application:" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#e4e4e7" Margin="0,0,12,0"/>
-                <ComboBox Grid.Column="1" x:Name="TargetCombo" Background="#18181b" Foreground="#18181b" FontSize="13" Padding="8,4" SelectedIndex="0">
+                <TextBlock Grid.Column="0" Text="Target:" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#e4e4e7" Margin="0,0,12,0"/>
+                <ComboBox Grid.Column="1" x:Name="TargetCombo" Background="#27272a" Foreground="#18181b" FontSize="13" Padding="8,5" SelectedIndex="0">
                     <ComboBoxItem Content="Antigravity Classic (Desktop App)" Tag="classic"/>
                     <ComboBoxItem Content="Antigravity IDE (VS Code Fork)" Tag="ide"/>
                     <ComboBoxItem Content="Antigravity CLI (agy)" Tag="agy"/>
@@ -116,8 +120,8 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
         </Border>
 
         <!-- Status / Message Banner -->
-        <Border Grid.Row="3" x:Name="StatusBanner" Background="#064e3b" BorderBrush="#059669" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,12,0,0" Visibility="Collapsed">
-            <TextBlock x:Name="StatusText" Text="Profile switched successfully" Foreground="#34d399" FontSize="12" TextWrapping="Wrap"/>
+        <Border Grid.Row="3" x:Name="StatusBanner" Background="#064e3b" BorderBrush="#059669" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,12,0,0" Visibility="Collapsed">
+            <TextBlock x:Name="StatusText" Text="Status notification" Foreground="#34d399" FontSize="12" TextWrapping="Wrap"/>
         </Border>
 
         <!-- Bottom Actions -->
@@ -128,15 +132,10 @@ function Run-Backend([string]$action, [string]$profileName = "", [string]$target
             </Grid.ColumnDefinitions>
 
             <Button Grid.Column="0" x:Name="BtnSaveAccount" Background="#2563eb" BorderBrush="#3b82f6" Foreground="White" FontWeight="SemiBold" Padding="14,9" Margin="0,0,8,0">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="➕ " FontSize="13"/>
-                    <TextBlock Text="Save Current Account" FontSize="13"/>
-                </StackPanel>
+                <TextBlock Text="Save Current Account" FontSize="13"/>
             </Button>
 
-            <Button Grid.Column="1" x:Name="BtnRefresh" Width="40" Padding="0" ToolTip="Refresh Profiles">
-                <TextBlock Text="🔄" FontSize="14"/>
-            </Button>
+            <Button Grid.Column="1" x:Name="BtnRefresh" Content="Refresh" Padding="12,9" ToolTip="Refresh profile list"/>
         </Grid>
     </Grid>
 </Window>
@@ -196,7 +195,7 @@ function Refresh-ProfilesList {
 
     if ($profiles.Count -eq 0) {
         $emptyBlock = New-Object System.Windows.Controls.TextBlock
-        $emptyBlock.Text = "No saved profiles for this target yet.`nClick '+ Save Current Account' to snapshot the currently signed-in account."
+        $emptyBlock.Text = "No saved profiles for this target yet.`nClick 'Save Current Account' to snapshot your currently signed-in account."
         $emptyBlock.Foreground = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromArgb(255, 161, 161, 170))
         $emptyBlock.FontSize = 13
         $emptyBlock.TextAlignment = [System.Windows.TextAlignment]::Center
@@ -223,7 +222,7 @@ function Refresh-ProfilesList {
         $card.BorderThickness = New-Object System.Windows.Thickness(1)
         $card.CornerRadius = New-Object System.Windows.CornerRadius(6)
         $card.Margin = New-Object System.Windows.Thickness(0, 0, 0, 8)
-        $card.Padding = New-Object System.Windows.Thickness(12, 10, 12, 10)
+        $card.Padding = New-Object System.Windows.Thickness(14, 10, 14, 10)
 
         $cardGrid = New-Object System.Windows.Controls.Grid
         $c1 = New-Object System.Windows.Controls.ColumnDefinition
@@ -265,7 +264,7 @@ function Refresh-ProfilesList {
         $infoStack.Children.Add($titleRow) | Out-Null
 
         $subRow = New-Object System.Windows.Controls.TextBlock
-        $subText = if ($email) { $email } else { "Saved: $created" }
+        $subText = if ($email) { $email } else { "Saved $created" }
         $subRow.Text = $subText
         $subRow.FontSize = 11
         $subRow.Foreground = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromArgb(255, 161, 161, 170))
@@ -288,7 +287,7 @@ function Refresh-ProfilesList {
             New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromArgb(255, 37, 99, 235))
         }
         $btnSwitch.Foreground = [System.Windows.Media.Brushes]::White
-        $btnSwitch.Padding = New-Object System.Windows.Thickness(10, 4, 10, 4)
+        $btnSwitch.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
         $btnSwitch.Margin = New-Object System.Windows.Thickness(0, 0, 6, 0)
         $btnSwitch.FontSize = 12
 
@@ -296,7 +295,7 @@ function Refresh-ProfilesList {
         $nameCaptured = $name
         $btnSwitch.Add_Click({
             $confirm = [System.Windows.MessageBox]::Show(
-                "Switch to profile '$nameCaptured'? Antigravity will restart to load this account.`nSave any open work first.",
+                "Switch to profile '$nameCaptured'? Antigravity will restart to load this account.`n`nSave any open work first.",
                 "Confirm Switch",
                 [System.Windows.MessageBoxButton]::OKCancel,
                 [System.Windows.MessageBoxImage]::Question
@@ -315,10 +314,10 @@ function Refresh-ProfilesList {
         $actionsStack.Children.Add($btnSwitch) | Out-Null
 
         $btnDelete = New-Object System.Windows.Controls.Button
-        $btnDelete.Content = "🗑"
+        $btnDelete.Content = "Delete"
         $btnDelete.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromArgb(255, 39, 39, 42))
         $btnDelete.Foreground = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromArgb(255, 248, 113, 113))
-        $btnDelete.Padding = New-Object System.Windows.Thickness(8, 4, 8, 4)
+        $btnDelete.Padding = New-Object System.Windows.Thickness(10, 4, 10, 4)
         $btnDelete.FontSize = 12
         $btnDelete.ToolTip = "Delete Profile"
         $btnDelete.Add_Click({
@@ -373,8 +372,8 @@ function Show-InputBox([string]$prompt, [string]$title) {
         <TextBlock Grid.Row="0" Text="$prompt" Foreground="#e4e4e7" FontSize="13" Margin="0,0,0,8"/>
         <TextBox Grid.Row="1" x:Name="InputText" Background="#27272a" Foreground="#f4f4f5" BorderBrush="#3f3f46" Padding="8,5" FontSize="13"/>
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button x:Name="BtnOk" Content="Save" Background="#2563eb" Foreground="White" Width="70" Padding="0,5" Margin="0,0,8,0" IsDefault="True"/>
-            <Button x:Name="BtnCancel" Content="Cancel" Background="#27272a" Foreground="#f4f4f5" Width="70" Padding="0,5" IsCancel="True"/>
+            <Button x:Name="BtnOk" Content="Save" Background="#2563eb" Foreground="White" Width="75" Padding="0,5" Margin="0,0,8,0" IsDefault="True"/>
+            <Button x:Name="BtnCancel" Content="Cancel" Background="#27272a" Foreground="#f4f4f5" Width="75" Padding="0,5" IsCancel="True"/>
         </StackPanel>
     </Grid>
 </Window>
@@ -418,7 +417,7 @@ $btnSaveAccount.Add_Click({
     Show-Status -message "Saving profile '$profileName'..."
     $res = Run-Backend -action "Save" -profileName $profileName -target $target
     if ($res.Success) {
-        Show-Status -message "Profile '$profileName' saved and encrypted with Windows DPAPI!"
+        Show-Status -message "Profile '$profileName' saved and encrypted with Windows DPAPI."
         Refresh-ProfilesList
     } else {
         Show-Status -message "Failed to save: $($res.Error)" -isError $true
