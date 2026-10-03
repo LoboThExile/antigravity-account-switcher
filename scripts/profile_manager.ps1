@@ -609,6 +609,15 @@ function Save-Profile {
     New-Item -ItemType Directory -Path $stagingPath -Force | Out-Null
     Protect-ProfileDirectory -Path $stagingPath
 
+    $wasRunning = $false
+    if ($Target -ne "agy") {
+        $procs = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)
+        if ($procs.Count -gt 0) {
+            $wasRunning = $true
+            Stop-Antigravity
+        }
+    }
+
     try {
         if ($Target -eq "agy") {
             $state = Get-CliState
@@ -641,6 +650,9 @@ function Save-Profile {
     } finally {
         if (Test-Path -LiteralPath $stagingPath) { Remove-Item -LiteralPath $stagingPath -Recurse -Force -ErrorAction SilentlyContinue }
         if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($wasRunning) {
+            try { Start-Antigravity } catch { Write-Warning "Could not restart Antigravity: $_" }
+        }
     }
 }
 

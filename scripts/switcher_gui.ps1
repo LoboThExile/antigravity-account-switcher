@@ -14,20 +14,20 @@ function Get-ActiveProfileName([string]$target) {
 }
 
 function Run-Backend([string]$action, [string]$profileName = "", [string]$target = "classic") {
-    $argsList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $BackendScript, "-Action", $action, "-Target", $target)
-    if (-not [string]::IsNullOrWhiteSpace($profileName)) {
-        $argsList += @("-ProfileName", $profileName)
+    try {
+        $params = @{
+            Action = $action
+            Target = $target
+        }
+        if (-not [string]::IsNullOrWhiteSpace($profileName)) {
+            $params["ProfileName"] = $profileName
+        }
+        $rawOut = & $BackendScript @params
+        $jsonStr = ($rawOut | Out-String).Trim()
+        return @{ Success = $true; Output = $jsonStr; Error = $null }
+    } catch {
+        return @{ Success = $false; Output = $null; Error = $_.Exception.Message }
     }
-    $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\agy_switcher_out.json" -RedirectStandardError "$env:TEMP\agy_switcher_err.txt"
-    $p.WaitForExit()
-    $stdout = if (Test-Path "$env:TEMP\agy_switcher_out.json") { Get-Content "$env:TEMP\agy_switcher_out.json" -Raw } else { "" }
-    $stderr = if (Test-Path "$env:TEMP\agy_switcher_err.txt") { Get-Content "$env:TEMP\agy_switcher_err.txt" -Raw } else { "" }
-    Remove-Item "$env:TEMP\agy_switcher_out.json", "$env:TEMP\agy_switcher_err.txt" -Force -ErrorAction SilentlyContinue
-
-    if ($p.ExitCode -ne 0) {
-        return @{ Success = $false; Error = if ($stderr) { $stderr } else { "Process exited with code $($p.ExitCode)" }; Output = $stdout }
-    }
-    return @{ Success = $true; Output = $stdout; Error = $null }
 }
 
 [xml]$xaml = @"
@@ -400,6 +400,17 @@ function Show-InputBox([string]$prompt, [string]$title) {
 
 $btnSaveAccount.Add_Click({
     $target = Get-SelectedTarget
+    $procs = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)
+    if ($procs.Count -gt 0 -and $target -ne "agy") {
+        $confirm = [System.Windows.MessageBox]::Show(
+            "Antigravity is currently running. Saving this account profile will briefly close and relaunch Antigravity to safely snapshot session cookies and tokens without file locks.`n`nSave any open work first. Do you want to proceed?",
+            "Notice",
+            [System.Windows.MessageBoxButton]::OKCancel,
+            [System.Windows.MessageBoxImage]::Information
+        )
+        if ($confirm -ne [System.Windows.MessageBoxResult]::OK) { return }
+    }
+
     $profileName = Show-InputBox -prompt "Enter a profile name (e.g. Work, Personal, Alt):" -title "Save Current Account Profile"
     if ([string]::IsNullOrWhiteSpace($profileName)) { return }
     $profileName = $profileName.Trim()
